@@ -44,12 +44,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install UI deps + compile Tailwind CSS
         working-directory: apps/desktop
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install --no-frozen-lockfile
           pnpm exec tailwindcss -i ./ui/src/input.css -o ./ui/output.css --minify
 
       - name: Resolve release tag
