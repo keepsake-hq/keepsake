@@ -11,6 +11,7 @@ use keepsake_crypto::{Kek, RootKeys};
 use keepsake_retrieval::FastEmbedder;
 use keepsake_store_sqlite::SqliteVault;
 use keepsake_vault::MemoryVault;
+use zeroize::Zeroize;
 
 #[derive(Parser)]
 #[command(name = "keepsake", about = "Sovereign, local-first memory vault")]
@@ -70,6 +71,28 @@ fn pairing_file() -> PathBuf {
     std::env::var("KEEPSAKE_PAIRING_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("keepsake-pairing.seed"))
+}
+
+/// Write `data` to `path` with owner-only (0600) permissions on Unix, so a one-time pairing
+/// secret cannot be read by other local users (KS-014).
+fn write_owner_only(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    f.write_all(data)?;
+    f.sync_all()?;
+    Ok(())
 }
 
 fn db_path() -> PathBuf {
@@ -167,7 +190,9 @@ fn main() {
                 let mut seed = [0u8; 32];
                 rand::rngs::OsRng.fill_bytes(&mut seed);
                 let device = keepsake_crypto::pairing::NewDevice::from_seed(&seed);
-                std::fs::write(pairing_file(), hex::encode(seed)).expect("save pairing secret");
+                write_owner_only(&pairing_file(), hex::encode(seed).as_bytes())
+                    .expect("save pairing secret");
+                seed.zeroize(); // wipe the in-memory copy after persisting
                 println!("{}", hex::encode(device.pairing_code()));
                 eprintln!(
                     "\nPairing code above. On your existing device:\n  keepsake pair offer <code>\nthen back here:\n  keepsake pair accept <offer>"
@@ -180,20 +205,44 @@ fn main() {
                     .as_slice()
                     .try_into()
                     .expect("32-byte pairing code");
-                let offer = keepsake_crypto::pairing::make_offer(&code_bytes, &mnemonic)
+                let (offer, sas) = keepsake_crypto::pairing::make_offer(&code_bytes, &mnemonic)
                     .expect("pairing code must be a valid (non-low-order) X25519 key");
                 println!("{}", hex::encode(offer));
+                eprintln!(
+                    "\n🔐 Verification code: {sas}\nConfirm this SAME 6-digit code appears on your new device before trusting the transfer.\nIf it differs, abort — someone may be intercepting the pairing."
+                );
             }
             PairCmd::Accept { offer } => {
                 let seed_hex = std::fs::read_to_string(pairing_file())
                     .expect("run `keepsake pair new` on this device first");
-                let seed: [u8; 32] = hex::decode(seed_hex.trim())
+                let mut seed: [u8; 32] = hex::decode(seed_hex.trim())
                     .expect("hex")
                     .as_slice()
                     .try_into()
                     .expect("32-byte seed");
                 let device = keepsake_crypto::pairing::NewDevice::from_seed(&seed);
+                seed.zeroize();
                 let offer_bytes = hex::decode(&offer).expect("hex offer");
+
+                // Authenticated accept: the user must confirm the SAS matches the offering
+                // device before the seed is revealed (KS-012).
+                let sas = keepsake_crypto::pairing::pairing_sas(&device.pairing_code(), &offer_bytes)
+                    .expect("offer is too short");
+                use std::io::Write;
+                eprint!(
+                    "🔐 Verification code: {sas}\nType the code shown on your OTHER device to confirm: "
+                );
+                std::io::stderr().flush().ok();
+                let mut typed = String::new();
+                std::io::stdin()
+                    .read_line(&mut typed)
+                    .expect("read confirmation");
+                if typed.trim() != sas {
+                    let _ = std::fs::remove_file(pairing_file());
+                    eprintln!("❌ Verification code mismatch — aborting. Do NOT trust this offer.");
+                    std::process::exit(1);
+                }
+
                 let mnemonic = device.accept(&offer_bytes).expect("open pairing offer");
                 println!("{mnemonic}");
                 eprintln!("\n✅ Paired. Set this as your seed:\n  export KEEPSAKE_MNEMONIC=\"<the words above>\"");

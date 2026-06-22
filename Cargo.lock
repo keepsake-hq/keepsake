@@ -1709,6 +1709,7 @@ dependencies = [
  "keepsake-store-sqlite",
  "keepsake-vault",
  "rand 0.8.6",
+ "zeroize",
 ]
 
 [[package]]

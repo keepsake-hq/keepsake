@@ -20,3 +20,4 @@ clap = { version = "4", features = ["derive"] }
 bip39 = { version = "2", features = ["rand"] }
 hex = "0.4"
 rand = "0.8"
+zeroize = "1"

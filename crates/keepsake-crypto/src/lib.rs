@@ -616,6 +616,7 @@ pub mod pairing {
     use super::{open_sealed, seal_to, ShareKeypair};
     use rand::rngs::OsRng;
     use rand::RngCore;
+    use sha2::{Digest, Sha256};
 
     /// A new, unpaired device: holds a one-time keypair and shows a pairing code.
     pub struct NewDevice {
@@ -647,11 +648,37 @@ pub mod pairing {
         pub fn accept(&self, sealed_offer: &[u8]) -> Option<String> {
             String::from_utf8(open_sealed(&self.keypair, sealed_offer).ok()?).ok()
         }
+
+        /// The SAS this device computes for `offer` — the user compares it with the SAS shown
+        /// on the offering device to detect a substituted code or tampered offer.
+        pub fn sas(&self, offer: &[u8]) -> Option<String> {
+            pairing_sas(&self.pairing_code(), offer)
+        }
     }
 
-    /// On the existing device: seal the vault `mnemonic` to a new device's `pairing_code`.
-    pub fn make_offer(pairing_code: &[u8; 32], mnemonic: &str) -> Option<Vec<u8>> {
-        seal_to(pairing_code, mnemonic.as_bytes())
+    /// On the existing device: seal the vault `mnemonic` to a new device's `pairing_code`,
+    /// returning the offer and the Short Authentication String the user MUST verify matches
+    /// the new device before trusting the transfer (KS-012).
+    pub fn make_offer(pairing_code: &[u8; 32], mnemonic: &str) -> Option<(Vec<u8>, String)> {
+        let offer = seal_to(pairing_code, mnemonic.as_bytes())?;
+        let sas = pairing_sas(pairing_code, &offer)?;
+        Some((offer, sas))
+    }
+
+    /// A 6-digit Short Authentication String binding a pairing offer to a pairing code. Both
+    /// devices compute it independently; the user compares them out of band. A substituted
+    /// code or a tampered offer yields a different SAS, exposing a man-in-the-middle.
+    pub fn pairing_sas(pairing_code: &[u8; 32], offer: &[u8]) -> Option<String> {
+        if offer.len() < 32 {
+            return None;
+        }
+        let mut h = Sha256::new();
+        h.update(b"keepsake/v1/pairing-sas");
+        h.update(pairing_code);
+        h.update(&offer[..32]); // the offer's ephemeral X25519 public key
+        let d = h.finalize();
+        let n = u32::from_be_bytes([d[0], d[1], d[2], d[3]]) % 1_000_000;
+        Some(format!("{n:06}"))
     }
 
     #[cfg(test)]
@@ -661,17 +688,25 @@ pub mod pairing {
         const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
 
         #[test]
-        fn pairing_moves_the_mnemonic_to_the_new_device_only() {
+        fn pairing_offer_carries_a_matching_sas_and_detects_substitution() {
             let device = NewDevice::generate();
             let code = device.pairing_code();
-            let offer = make_offer(&code, TEST_MNEMONIC).unwrap();
-            assert_eq!(device.accept(&offer).unwrap(), TEST_MNEMONIC);
+            let (offer, sas) = make_offer(&code, TEST_MNEMONIC).unwrap();
 
+            // Honest transfer: the new device opens it and derives the SAME SAS.
+            assert_eq!(device.accept(&offer).unwrap(), TEST_MNEMONIC);
+            assert_eq!(device.sas(&offer).unwrap(), sas);
+
+            // Only the paired device can open the offer.
             let attacker = NewDevice::generate();
             assert!(
                 attacker.accept(&offer).is_none(),
                 "only the paired device can open the offer"
             );
+            // A different pairing code yields a different SAS, so a substituted code is caught.
+            let (_atk_offer, atk_sas) =
+                make_offer(&attacker.pairing_code(), TEST_MNEMONIC).unwrap();
+            assert_ne!(atk_sas, sas, "a substituted pairing code yields a different SAS");
         }
     }
 }
