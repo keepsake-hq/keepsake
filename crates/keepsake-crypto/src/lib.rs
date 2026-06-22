@@ -202,10 +202,13 @@ impl ShareKeypair {
 /// ephemeral ECDH + HKDF + AES-256-GCM). Only the matching secret can open it.
 ///
 /// Wire format: `ephemeral_public(32) || nonce(12) || ciphertext+tag`.
-pub fn seal_to(recipient_public: &[u8; 32], plaintext: &[u8]) -> Vec<u8> {
+pub fn seal_to(recipient_public: &[u8; 32], plaintext: &[u8]) -> Option<Vec<u8>> {
     let ephemeral = StaticSecret::random_from_rng(OsRng);
     let epk = PublicKey::from(&ephemeral).to_bytes();
     let shared = ephemeral.diffie_hellman(&PublicKey::from(*recipient_public));
+    if !shared_is_contributory(&shared) {
+        return None;
+    }
     let key = derive_share_key(shared.as_bytes());
 
     let mut nonce = [0u8; 12];
@@ -219,7 +222,7 @@ pub fn seal_to(recipient_public: &[u8; 32], plaintext: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&epk);
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ct);
-    out
+    Some(out)
 }
 
 /// Open a box produced by [`seal_to`] with the recipient's keypair.
@@ -234,11 +237,22 @@ pub fn open_sealed(keypair: &ShareKeypair, sealed: &[u8]) -> Result<Vec<u8>, Cry
     let ct = &sealed[44..];
 
     let shared = keypair.secret.diffie_hellman(&PublicKey::from(epk));
+    if !shared_is_contributory(&shared) {
+        return Err(CryptoError::Aead);
+    }
     let key = derive_share_key(shared.as_bytes());
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| CryptoError::Aead)?;
     cipher
         .decrypt(Nonce::from_slice(&nonce), ct)
         .map_err(|_| CryptoError::Aead)
+}
+
+/// X25519 maps every low-order public key to the all-zero shared secret (the scalar is
+/// clamped to clear the cofactor, RFC 7748 §6.1). A non-zero shared secret therefore proves
+/// the peer key was not low-order — rejecting the all-zero result blocks the classic
+/// "encrypt to a key the attacker already knows" attack on the sealed box.
+fn shared_is_contributory(shared: &x25519_dalek::SharedSecret) -> bool {
+    shared.as_bytes() != &[0u8; 32]
 }
 
 fn derive_share_key(shared: &[u8]) -> [u8; 32] {
@@ -334,6 +348,9 @@ impl HybridShareKeypair {
         let body = &sealed[32 + MLKEM768_CT_LEN + 12..];
 
         let x_ss = self.x_secret.diffie_hellman(&PublicKey::from(epk));
+        if !shared_is_contributory(&x_ss) {
+            return None;
+        }
         let ct = ml_kem::Ciphertext::<ml_kem::MlKem768>::try_from(ct_bytes).ok()?;
         let kem_ss = self.kem_dk.decapsulate(&ct).ok()?;
 
@@ -362,6 +379,9 @@ pub fn seal_to_hybrid(recipient_public: &[u8], plaintext: &[u8]) -> Option<Vec<u
     let ephemeral = StaticSecret::random_from_rng(OsRng);
     let epk = PublicKey::from(&ephemeral).to_bytes();
     let x_ss = ephemeral.diffie_hellman(&PublicKey::from(x_pub));
+    if !shared_is_contributory(&x_ss) {
+        return None;
+    }
 
     let (ct, kem_ss) = ek.encapsulate(&mut OsRng).ok()?;
 
@@ -492,6 +512,14 @@ pub mod recovery {
         if shares.iter().any(|s| s.bytes.len() != len) {
             return None;
         }
+        // Lagrange interpolation needs distinct, non-zero x-indices. A repeated index makes
+        // a denominator (x_i ^ x_j) zero -> GF inverse of zero -> a silently wrong secret;
+        // index 0 collides with the secret's own x-coordinate. Reject both.
+        for (i, si) in shares.iter().enumerate() {
+            if si.index == 0 || shares[..i].iter().any(|s| s.index == si.index) {
+                return None;
+            }
+        }
         let mut secret = vec![0u8; len];
         for (pos, byte) in secret.iter_mut().enumerate() {
             let mut acc = 0u8;
@@ -532,6 +560,19 @@ pub mod recovery {
         fn one_of_one_is_the_secret() {
             let secret = vec![7u8; 16];
             assert_eq!(combine(&split(&secret, 1, 1)).unwrap(), secret);
+        }
+
+        #[test]
+        fn combine_rejects_duplicate_share_indices() {
+            // Two shares carrying the same x-index is malformed input; combine must reject
+            // it rather than silently returning a wrong secret (GF inverse of zero).
+            let secret: Vec<u8> = (0u8..16).collect();
+            let shares = split(&secret, 2, 3);
+            let dup = vec![shares[0].clone(), shares[0].clone()];
+            assert!(
+                combine(&dup).is_none(),
+                "combine must reject duplicate share indices"
+            );
         }
     }
 }
@@ -576,7 +617,7 @@ pub mod pairing {
     }
 
     /// On the existing device: seal the vault `mnemonic` to a new device's `pairing_code`.
-    pub fn make_offer(pairing_code: &[u8; 32], mnemonic: &str) -> Vec<u8> {
+    pub fn make_offer(pairing_code: &[u8; 32], mnemonic: &str) -> Option<Vec<u8>> {
         seal_to(pairing_code, mnemonic.as_bytes())
     }
 
@@ -590,7 +631,7 @@ pub mod pairing {
         fn pairing_moves_the_mnemonic_to_the_new_device_only() {
             let device = NewDevice::generate();
             let code = device.pairing_code();
-            let offer = make_offer(&code, TEST_MNEMONIC);
+            let offer = make_offer(&code, TEST_MNEMONIC).unwrap();
             assert_eq!(device.accept(&offer).unwrap(), TEST_MNEMONIC);
 
             let attacker = NewDevice::generate();
@@ -771,11 +812,42 @@ mod tests {
         let other = ShareKeypair::from_seed(&[2u8; 32]);
         let secret = b"this is a wrapped DEK";
 
-        let sealed = seal_to(&recipient.public(), secret);
+        let sealed = seal_to(&recipient.public(), secret).unwrap();
         assert_eq!(open_sealed(&recipient, &sealed).unwrap(), secret);
         assert!(
             open_sealed(&other, &sealed).is_err(),
             "a non-recipient must not be able to open the box"
+        );
+    }
+
+    #[test]
+    fn seal_to_rejects_low_order_public_keys() {
+        // The all-zero point is low-order: X25519 yields an all-zero shared secret the
+        // attacker also knows, so a "sealed" box to it is not confidential. Reject it.
+        assert!(
+            seal_to(&[0u8; 32], b"secret").is_none(),
+            "sealing to a low-order (all-zero) key must be rejected"
+        );
+    }
+
+    #[test]
+    fn open_sealed_rejects_low_order_ephemeral_key() {
+        // An attacker using a low-order ephemeral key knows the shared secret is all-zero,
+        // so they can craft a box the recipient would otherwise "successfully" open.
+        let recipient = ShareKeypair::from_seed(&[1u8; 32]);
+        let key = derive_share_key(&[0u8; 32]);
+        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
+        let nonce = [0u8; 12];
+        let ct = cipher
+            .encrypt(Nonce::from_slice(&nonce), b"attacker chosen".as_ref())
+            .unwrap();
+        let mut sealed = Vec::new();
+        sealed.extend_from_slice(&[0u8; 32]); // low-order ephemeral public key
+        sealed.extend_from_slice(&nonce);
+        sealed.extend_from_slice(&ct);
+        assert!(
+            open_sealed(&recipient, &sealed).is_err(),
+            "a box with a low-order ephemeral key must be rejected, not opened"
         );
     }
 }

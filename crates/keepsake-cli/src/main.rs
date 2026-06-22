@@ -180,7 +180,8 @@ fn main() {
                     .as_slice()
                     .try_into()
                     .expect("32-byte pairing code");
-                let offer = keepsake_crypto::pairing::make_offer(&code_bytes, &mnemonic);
+                let offer = keepsake_crypto::pairing::make_offer(&code_bytes, &mnemonic)
+                    .expect("pairing code must be a valid (non-low-order) X25519 key");
                 println!("{}", hex::encode(offer));
             }
             PairCmd::Accept { offer } => {

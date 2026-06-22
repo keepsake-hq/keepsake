@@ -121,7 +121,7 @@ impl<E: Embedder> MemoryVault<E> {
         grantee_public: &[u8; 32],
     ) -> Result<Option<Vec<u8>>, StoreError> {
         match self.store.recall(kek, id)? {
-            Some(plaintext) => Ok(Some(keepsake_crypto::seal_to(grantee_public, &plaintext))),
+            Some(plaintext) => Ok(keepsake_crypto::seal_to(grantee_public, &plaintext)),
             None => Ok(None),
         }
     }
@@ -149,10 +149,15 @@ impl<E: Embedder> MemoryVault<E> {
         let Some(plaintext) = self.store.recall(kek, id)? else {
             return Ok(None);
         };
-        let portions = grantees
+        // Atomic: if sealing to any grantee fails (e.g. a low-order / invalid key), reject
+        // the whole contract rather than issuing a partial one.
+        let Some(portions) = grantees
             .iter()
-            .map(|g| (*g, keepsake_crypto::seal_to(g, &plaintext)))
-            .collect();
+            .map(|g| keepsake_crypto::seal_to(g, &plaintext).map(|s| (*g, s)))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
         Ok(Some(ShareContract {
             kind,
             issued_at: now,
