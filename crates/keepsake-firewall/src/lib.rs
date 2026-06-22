@@ -5,6 +5,7 @@
 //! - [`ReceiptLog`] — a tamper-evident, HMAC-chained local audit log (the "Memory Receipt").
 
 use hmac::{Hmac, Mac};
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -104,7 +105,7 @@ impl Redactor {
 }
 
 /// One tamper-evident receipt in the local audit chain.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Receipt {
     pub seq: u64,
     pub kind: String,
@@ -117,23 +118,59 @@ pub struct Receipt {
 pub struct ReceiptLog {
     key: [u8; 32],
     entries: Vec<Receipt>,
+    path: Option<std::path::PathBuf>,
 }
 
 impl ReceiptLog {
-    /// Start a fresh log, deriving the MAC key from the `receipt_root`.
+    /// Start a fresh in-memory log, deriving the MAC key from the `receipt_root`.
     pub fn new(receipt_root: &[u8; 32]) -> Self {
         ReceiptLog {
             key: derive_receipt_key(receipt_root),
             entries: Vec::new(),
+            path: None,
         }
     }
 
-    /// Load a persisted log to verify it.
+    /// Load an in-memory log from existing entries (e.g. to verify them).
     pub fn from_entries(receipt_root: &[u8; 32], entries: Vec<Receipt>) -> Self {
         ReceiptLog {
             key: derive_receipt_key(receipt_root),
             entries,
+            path: None,
         }
+    }
+
+    /// Open a persisted receipt chain at `path` (created on first append), loading and
+    /// verifying any existing entries; subsequent appends are durably written to the file
+    /// (KS-015). Returns an error if the on-disk chain fails verification.
+    pub fn open(
+        receipt_root: &[u8; 32],
+        path: impl Into<std::path::PathBuf>,
+    ) -> std::io::Result<ReceiptLog> {
+        let path = path.into();
+        let mut entries = Vec::new();
+        if path.exists() {
+            for line in std::fs::read_to_string(&path)?.lines() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let r: Receipt = serde_json::from_str(line)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                entries.push(r);
+            }
+        }
+        let log = ReceiptLog {
+            key: derive_receipt_key(receipt_root),
+            entries,
+            path: Some(path),
+        };
+        if !log.verify() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "receipt chain failed verification",
+            ));
+        }
+        Ok(log)
     }
 
     /// Append a receipt for an event (kind + detail), chaining it to the previous.
@@ -141,13 +178,19 @@ impl ReceiptLog {
         let seq = self.entries.len() as u64;
         let prev = self.entries.last().map(|r| r.mac).unwrap_or([0u8; 32]);
         let mac = self.mac(seq, kind, detail, &prev);
-        self.entries.push(Receipt {
+        let receipt = Receipt {
             seq,
             kind: kind.to_string(),
             detail: detail.to_string(),
             prev,
             mac,
-        });
+        };
+        // Durably append (fsync) to the persisted chain before keeping it in memory, so a
+        // crash cannot lose a recorded cloud disclosure. Best-effort if the disk write fails.
+        if let Some(path) = &self.path {
+            let _ = append_receipt_line(path, &receipt);
+        }
+        self.entries.push(receipt);
     }
 
     pub fn entries(&self) -> &[Receipt] {
@@ -189,6 +232,20 @@ fn derive_receipt_key(receipt_root: &[u8; 32]) -> [u8; 32] {
     let mut key = [0u8; 32];
     key.copy_from_slice(&m.finalize().into_bytes());
     key
+}
+
+/// Append a single receipt as a JSON line and fsync, so it is durable before we continue.
+fn append_receipt_line(path: &std::path::Path, receipt: &Receipt) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    let mut line = serde_json::to_vec(receipt).expect("Receipt serializes");
+    line.push(b'\n');
+    f.write_all(&line)?;
+    f.sync_all()?;
+    Ok(())
 }
 
 /// Object-capability tokens (macaroon construction): offline-verifiable, **attenuable
@@ -595,5 +652,41 @@ mod tests {
         tampered[0].detail = "TAMPERED".to_string();
         let loaded = ReceiptLog::from_entries(&root, tampered);
         assert!(!loaded.verify(), "a mutated entry must break verification");
+    }
+
+    #[test]
+    fn receipt_log_persists_and_reloads_across_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.log");
+        let root = [9u8; 32];
+        {
+            let mut log = ReceiptLog::open(&root, &path).unwrap();
+            log.append("recall", "cells=3");
+            log.append("cloud_egress", "provider=local");
+        } // drop — entries are already fsync'd to disk
+
+        let reloaded = ReceiptLog::open(&root, &path).unwrap();
+        assert_eq!(reloaded.entries().len(), 2, "the chain survived a restart");
+        assert!(reloaded.verify(), "the reloaded chain still verifies");
+        assert_eq!(reloaded.entries()[0].kind, "recall");
+    }
+
+    #[test]
+    fn a_tampered_persisted_receipt_log_refuses_to_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("receipts.log");
+        let root = [9u8; 32];
+        {
+            let mut log = ReceiptLog::open(&root, &path).unwrap();
+            log.append("a", "1");
+        }
+        let content = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("\"1\"", "\"TAMPERED\"");
+        std::fs::write(&path, content).unwrap();
+        assert!(
+            ReceiptLog::open(&root, &path).is_err(),
+            "a tampered persisted chain must not open"
+        );
     }
 }

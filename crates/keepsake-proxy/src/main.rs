@@ -27,7 +27,10 @@ async fn main() {
 
     let roots = RootKeys::from_mnemonic(&mnemonic, "").expect("valid BIP-39 mnemonic");
     let kek = Kek::from_root(&roots.encryption_root);
-    let receipts = ReceiptLog::new(&roots.receipt_root);
+    let receipts_path = std::env::var("KEEPSAKE_RECEIPTS")
+        .unwrap_or_else(|_| "keepsake-receipts.log".to_string());
+    let receipts =
+        ReceiptLog::open(&roots.receipt_root, &receipts_path).expect("open receipt log");
 
     let store = SqliteVault::open(Path::new(&db), &roots.db_key()).expect("open vault");
     let embedder = match std::env::var("KEEPSAKE_EMBED").as_deref() {
