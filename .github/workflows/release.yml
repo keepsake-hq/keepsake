@@ -1,13 +1,21 @@
 name: release
 
-# Cut a release by pushing a version tag, e.g.:  git tag v0.1.0 && git push origin v0.1.0
+# Two ways to cut a release:
+#   • push a version tag:            git push origin v0.1.0
+#   • or click "Run workflow" in the Actions tab (no terminal) and type the tag.
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: true
+        default: 'v0.1.0'
 
 # Only the built-in token is needed — no Apple secrets, no PATs, nothing that ties
-# this build to a person. The release is attributed to whoever pushes the tag.
+# this build to a person.
 permissions:
   contents: write
 
@@ -37,14 +45,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: pnpm
-          cache-dependency-path: apps/desktop/pnpm-lock.yaml
 
       - name: Install UI deps + compile Tailwind CSS
         working-directory: apps/desktop
         run: |
           pnpm install --frozen-lockfile
           pnpm exec tailwindcss -i ./ui/src/input.css -o ./ui/output.css --minify
+
+      - name: Resolve release tag
+        id: rel
+        run: echo "tag=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Build & publish Keepsake (.dmg, ad-hoc signed)
         uses: tauri-apps/tauri-action@v0
@@ -55,8 +65,8 @@ jobs:
           APPLE_SIGNING_IDENTITY: '-'
         with:
           projectPath: apps/desktop/src-tauri
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Keepsake ${{ github.ref_name }}'
+          tagName: ${{ steps.rel.outputs.tag }}
+          releaseName: 'Keepsake ${{ steps.rel.outputs.tag }}'
           releaseBody: |
             **Keepsake for macOS (Apple Silicon).**
 
