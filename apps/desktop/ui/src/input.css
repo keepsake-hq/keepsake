@@ -1,0 +1,66 @@
+@import "tailwindcss" source(none);
+@source "../index.html";
+@source "../app.js";
+
+/* Keepsake design system — light, calm, "secure & local". Source of truth: the
+   product mockups (green accent, soft cards, generous spacing). Fonts use the native
+   system stack (SF Pro on macOS) so the app stays fully offline with no web fonts. */
+@theme {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+
+  /* Brand green */
+  --color-brand-50: #f0fdf4;
+  --color-brand-100: #dcfce7;
+  --color-brand-200: #bbf7d0;
+  --color-brand-300: #86efac;
+  --color-brand-400: #4ade80;
+  --color-brand-500: #22c55e;
+  --color-brand-600: #16a34a;
+  --color-brand-700: #15803d;
+  --color-brand-800: #166534;
+
+  /* App surfaces */
+  --color-canvas: #f6f7f8;
+  --color-sidebar: #ffffff;
+}
+
+/* Indeterminate loading bar (used during first-run model download / unlock). */
+@keyframes keepsake-load {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}
+.loading-bar-fill {
+  animation: keepsake-load 1.25s ease-in-out infinite;
+}
+
+/* Small global niceties. */
+html {
+  scroll-behavior: smooth;
+}
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+::selection {
+  background: color-mix(in srgb, var(--color-brand-500) 22%, transparent);
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
+  background-clip: content-box;
+}

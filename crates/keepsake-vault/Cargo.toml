@@ -1,0 +1,16 @@
+[package]
+name = "keepsake-vault"
+version = "0.0.0"
+description = "Keepsake integration: durable store + local embeddings = semantic remember / recall / forget."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+keepsake-crypto = { path = "../keepsake-crypto" }
+keepsake-core = { path = "../keepsake-core" }
+keepsake-store-sqlite = { path = "../keepsake-store-sqlite" }
+keepsake-retrieval = { path = "../keepsake-retrieval" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,19 @@
+[package]
+name = "keepsake-proxy"
+version = "0.0.0"
+description = "Keepsake LLM proxy: RAG memory injection, write-back, and localhost security for an OpenAI-compatible gateway."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+keepsake-crypto = { path = "../keepsake-crypto" }
+keepsake-retrieval = { path = "../keepsake-retrieval" }
+keepsake-store-sqlite = { path = "../keepsake-store-sqlite" }
+keepsake-vault = { path = "../keepsake-vault" }
+keepsake-firewall = { path = "../keepsake-firewall" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+axum = "0.8"
+reqwest = { version = "0.12", features = ["json"] }

@@ -1,0 +1,15 @@
+{
+  "name": "keepsake-desktop-ui",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Keepsake desktop frontend build (Tailwind v4, compiled locally for offline + strict CSP).",
+  "packageManager": "pnpm@11.4.0",
+  "scripts": {
+    "build:css": "tailwindcss -i ./ui/src/input.css -o ./ui/output.css --minify",
+    "watch:css": "tailwindcss -i ./ui/src/input.css -o ./ui/output.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4",
+    "tailwindcss": "^4"
+  }
+}

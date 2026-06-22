@@ -1,0 +1,11 @@
+[package]
+name = "keepsake-core"
+version = "0.0.0"
+description = "Keepsake vault core: two-plane store (append-only content + erasable key-manifest) and §4a erasure mechanics."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+keepsake-crypto = { path = "../keepsake-crypto" }
+sha2 = "0.10"

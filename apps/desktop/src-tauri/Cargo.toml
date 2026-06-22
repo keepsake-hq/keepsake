@@ -1,0 +1,29 @@
+[package]
+name = "keepsake-desktop"
+version = "0.0.0"
+description = "Keepsake — sovereign memory vault desktop app"
+edition = "2021"
+rust-version = "1.77.2"
+
+# Standalone workspace so the heavy Tauri build stays out of the core crate workspace.
+[workspace]
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+hex = "0.4"
+keepsake-crypto = { path = "../../../crates/keepsake-crypto" }
+keepsake-store-sqlite = { path = "../../../crates/keepsake-store-sqlite" }
+keepsake-retrieval = { path = "../../../crates/keepsake-retrieval" }
+keepsake-vault = { path = "../../../crates/keepsake-vault" }
+keepsake-desktop-core = { path = "../../../crates/keepsake-desktop-core" }

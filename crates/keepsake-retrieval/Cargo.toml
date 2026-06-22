@@ -1,0 +1,15 @@
+[package]
+name = "keepsake-retrieval"
+version = "0.0.0"
+description = "Keepsake retrieval: in-RAM vector index, local embedding abstraction, per-cell encrypted embeddings."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+keepsake-crypto = { path = "../keepsake-crypto" }
+keepsake-core = { path = "../keepsake-core" }
+# Real local embedding model (ONNX via fastembed), always on. Downloads the model on
+# first use; runs fully on-device thereafter.
+fastembed = "5"
+anyhow = "1"

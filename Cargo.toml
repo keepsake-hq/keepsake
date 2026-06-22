@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/keepsake-crypto",
+    "crates/keepsake-core",
+    "crates/keepsake-store-sqlite",
+    "crates/keepsake-retrieval",
+    "crates/keepsake-vault",
+    "crates/keepsake-proxy",
+    "crates/keepsake-firewall",
+    "crates/keepsake-mcp",
+    "crates/keepsake-cli",
+    "crates/keepsake-sync",
+    "crates/keepsake-relay",
+    "crates/keepsake-desktop-core",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/keepsake-hq/keepsake"

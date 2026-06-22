@@ -1,0 +1,55 @@
+============================================================================
+NOTE (delete this block before posting). Post this thread from @keepsake_hq
+(repo: github.com/keepsake-hq/keepsake).
+Pair tweets 1, 4, 5 with a visual: 1 = the light dashboard screenshot,
+4 = a short architecture diagram or the crate list, 5 = a 10–20s screen
+recording of "Doktor" → recalling the dentist note (semantic search).
+One idea + one visual per tweet. Reply fast to technical questions.
+============================================================================
+
+1/
+Every "AI memory" product stores your context on their servers. Readable by them. Locked to
+one model. Gone if they pivot.
+
+So I built the opposite: Keepsake — a long-term memory for LLMs that lives on YOUR machine,
+encrypted, owned like a wallet. Open source. Here's how 🧵
+
+2/
+The problem isn't "remembering." It's custody.
+
+Your notes, your plans, the stuff you tell an AI all day — that's some of your most personal
+data. It shouldn't live in a SaaS account you can't read and can't truly delete.
+
+3/
+The insight: treat memory like a crypto wallet, not a login.
+
+One 24-word seed derives every key. The whole store is a single SQLCipher-encrypted file on
+your disk. No account, no server. Lose the seed = lose the data. That's the trade for real
+ownership.
+
+4/
+How it works:
+• On-device embeddings (Nomic/ONNX) → semantic recall, fully local
+• Random per-cell key → `forget` destroys the KEY, so ciphertext is unrecoverable for real
+• OpenAI-compatible proxy + MCP → works with any model, Claude, Cursor
+• PQC sharing: X25519 + ML-KEM-768, ML-DSA-65 signatures
+
+5/
+Proof it's semantic + local: I typed "what should I get my friend?" and it recalled "buy a
+birthday gift for Sarah" — no shared words, no internet.
+
+Don't trust me (I'm anonymous): no telemetry, runs with Wi-Fi off, ~4,900 lines of Rust you
+can read. [demo clip]
+
+6/
+The honest part most tools hide: zero-knowledge AT REST is real; zero-knowledge DURING CLOUD
+INFERENCE is not. Anything you send a cloud model is plaintext to them.
+
+So Keepsake defaults to your LOCAL model, and makes any cloud send an explicit, logged choice.
+
+7/
+It's Apache-2.0, ~4,900 LOC, 12 small crates, zero accounts, runs offline. macOS desktop app
+(Tauri v2) + CLI.
+
+Repo 👉 github.com/keepsake-hq/keepsake
+Build it, break it, file issues. Star it if you want memory you actually own. 👇

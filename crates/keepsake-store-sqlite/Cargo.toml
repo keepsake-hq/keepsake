@@ -1,0 +1,17 @@
+[package]
+name = "keepsake-store-sqlite"
+version = "0.0.0"
+description = "Keepsake SQLite-backed vault store with §4a physical erasure (secure_delete + WAL truncation on forget)."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+keepsake-crypto = { path = "../keepsake-crypto" }
+keepsake-core = { path = "../keepsake-core" }
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"

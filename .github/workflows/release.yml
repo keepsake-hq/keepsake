@@ -1,0 +1,74 @@
+name: release
+
+# Cut a release by pushing a version tag, e.g.:  git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Only the built-in token is needed — no Apple secrets, no PATs, nothing that ties
+# this build to a person. The release is attributed to whoever pushes the tag.
+permissions:
+  contents: write
+
+jobs:
+  release-macos:
+    runs-on: macos-14 # Apple Silicon (arm64)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable, Apple Silicon target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo build (standalone workspace inside the app dir)
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'apps/desktop/src-tauri -> target'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: Install UI deps + compile Tailwind CSS
+        working-directory: apps/desktop
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec tailwindcss -i ./ui/src/input.css -o ./ui/output.css --minify
+
+      - name: Build & publish Keepsake (.dmg, ad-hoc signed)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Ad-hoc signing only (also pinned in tauri.conf.json). No Apple credentials,
+          # so no legal identity is embedded in the binary or the release.
+          APPLE_SIGNING_IDENTITY: '-'
+        with:
+          projectPath: apps/desktop/src-tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Keepsake ${{ github.ref_name }}'
+          releaseBody: |
+            **Keepsake for macOS (Apple Silicon).**
+
+            This build is **unsigned / ad-hoc** on purpose — notarization would tie the
+            app to a paid Apple identity, and Keepsake ships anonymously. On first launch,
+            **right-click the app → Open** (or System Settings → Privacy & Security →
+            "Open Anyway"). One time only.
+
+            First unlock downloads the local embedding model once (~500 MB) into
+            `~/.keepsake/models`; afterwards the app runs fully offline. No accounts, no
+            telemetry. Prefer zero trust? Build it yourself from source.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: false
+          args: --target aarch64-apple-darwin --bundles app dmg

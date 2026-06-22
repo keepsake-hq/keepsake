@@ -1,0 +1,21 @@
+[package]
+name = "keepsake-mcp"
+version = "0.0.0"
+description = "Keepsake MCP surface: the eight saihm_* tools dispatching to a sovereign MemoryVault."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "keepsake-mcp"
+path = "src/main.rs"
+
+[dependencies]
+keepsake-crypto = { path = "../keepsake-crypto" }
+keepsake-core = { path = "../keepsake-core" }
+keepsake-store-sqlite = { path = "../keepsake-store-sqlite" }
+keepsake-retrieval = { path = "../keepsake-retrieval" }
+keepsake-vault = { path = "../keepsake-vault" }
+keepsake-firewall = { path = "../keepsake-firewall" }
+serde_json = "1"
+hex = "0.4"

@@ -1,0 +1,15 @@
+/target
+**/target/
+**/*.rs.bk
+Cargo.lock.bak
+.DS_Store
+
+# Local model cache (downloaded at runtime; never commit the model)
+.fastembed_cache/
+**/.fastembed_cache/
+
+# Node / Tailwind build tooling
+**/node_modules/
+
+# Build artifacts
+*.dmg

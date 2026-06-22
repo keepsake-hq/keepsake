@@ -1,0 +1,23 @@
+[package]
+name = "keepsake-relay"
+version = "0.0.0"
+description = "Keepsake dumb zero-knowledge sync relay: stores opaque encrypted snapshots over HTTP."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "keepsake-relay"
+path = "src/main.rs"
+
+[dependencies]
+keepsake-sync = { path = "../keepsake-sync" }
+keepsake-store-sqlite = { path = "../keepsake-store-sqlite" }
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+axum = "0.8"
+reqwest = "0.12"
+
+[dev-dependencies]
+keepsake-crypto = { path = "../keepsake-crypto" }
+tempfile = "3"

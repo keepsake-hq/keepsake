@@ -1,0 +1,16 @@
+[package]
+name = "keepsake-desktop-core"
+version = "0.0.0"
+description = "Keepsake desktop command logic (vault operations as testable, frontend-friendly functions)."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+keepsake-core = { path = "../keepsake-core" }
+keepsake-crypto = { path = "../keepsake-crypto" }
+keepsake-store-sqlite = { path = "../keepsake-store-sqlite" }
+keepsake-retrieval = { path = "../keepsake-retrieval" }
+keepsake-vault = { path = "../keepsake-vault" }
+serde = { version = "1", features = ["derive"] }
+hex = "0.4"

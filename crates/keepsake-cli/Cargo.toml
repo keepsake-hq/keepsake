@@ -1,0 +1,22 @@
+[package]
+name = "keepsake-cli"
+version = "0.0.0"
+description = "Keepsake CLI — init a seed, remember/recall/forget memories from the terminal."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "keepsake"
+path = "src/main.rs"
+
+[dependencies]
+keepsake-crypto = { path = "../keepsake-crypto" }
+keepsake-core = { path = "../keepsake-core" }
+keepsake-store-sqlite = { path = "../keepsake-store-sqlite" }
+keepsake-retrieval = { path = "../keepsake-retrieval" }
+keepsake-vault = { path = "../keepsake-vault" }
+clap = { version = "4", features = ["derive"] }
+bip39 = { version = "2", features = ["rand"] }
+hex = "0.4"
+rand = "0.8"

@@ -1,0 +1,15 @@
+[package]
+name = "keepsake-sync"
+version = "0.0.0"
+description = "Keepsake state-based, erasure-safe multi-device sync over a dumb relay."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+keepsake-store-sqlite = { path = "../keepsake-store-sqlite" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+keepsake-crypto = { path = "../keepsake-crypto" }
