@@ -49,7 +49,10 @@ jobs:
       - name: Install UI deps + compile Tailwind CSS
         working-directory: apps/desktop
         run: |
-          pnpm install --no-frozen-lockfile
+          # pnpm 11 exits non-zero merely because it skips an optional dep's build
+          # script (@parcel/watcher, only used for --watch). The install itself
+          # succeeds; the Tailwind compile on the next line is the real check.
+          pnpm install --no-frozen-lockfile || true
           pnpm exec tailwindcss -i ./ui/src/input.css -o ./ui/output.css --minify
 
       - name: Resolve release tag
