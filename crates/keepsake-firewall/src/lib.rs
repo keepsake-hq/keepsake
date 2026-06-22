@@ -299,6 +299,129 @@ pub mod capability {
         pub fn decode_hex(s: &str) -> Option<CapabilityToken> {
             serde_json::from_slice(&hex::decode(s).ok()?).ok()
         }
+
+        /// Verify the token under `root_key` and collapse ALL of its caveats into the
+        /// effective [`Authorization`] with *meet semantics* — every caveat narrows and the
+        /// most restrictive value of each kind wins. Enforcement must use this, never a single
+        /// first-match `caveat()` (which a later attenuation would silently bypass).
+        pub fn authorize(&self, root_key: &[u8; 32]) -> Option<Authorization> {
+            if !self.verify(root_key) {
+                return None;
+            }
+            let caps: Vec<&str> = self
+                .caveats
+                .iter()
+                .filter(|c| c.key == "capability")
+                .map(|c| c.value.as_str())
+                .collect();
+            if caps.is_empty() {
+                return None; // a capability token must name at least one capability
+            }
+            // Operation grants INTERSECT (narrow-only); an unknown capability grants nothing.
+            // Crucially, write does NOT imply read.
+            let (mut read, mut write, mut admin) = (true, true, true);
+            for v in caps {
+                let (r, w, a) = match v {
+                    "memory:read" => (true, false, false),
+                    "memory:write" => (false, true, false),
+                    "memory:admin" => (true, true, true),
+                    _ => (false, false, false),
+                };
+                read &= r;
+                write &= w;
+                admin &= a;
+            }
+            // max_records / expires: the minimum (most restrictive) across every such caveat.
+            let mut max_records: Option<usize> = None;
+            let mut expires: Option<u64> = None;
+            for c in &self.caveats {
+                match c.key.as_str() {
+                    "max_records" => {
+                        let n = c.value.parse::<usize>().ok()?;
+                        max_records = Some(max_records.map_or(n, |m| m.min(n)));
+                    }
+                    "expires" => {
+                        let n = c.value.parse::<u64>().ok()?;
+                        expires = Some(expires.map_or(n, |m| m.min(n)));
+                    }
+                    _ => {}
+                }
+            }
+            let topics: std::collections::BTreeSet<String> = self
+                .caveats
+                .iter()
+                .filter(|c| c.key == "scope_topic")
+                .map(|c| c.value.clone())
+                .collect();
+            // Cloud egress: allowed only if explicitly granted and never forbidden.
+            let granted = self
+                .caveats
+                .iter()
+                .any(|c| c.key == "cloud_egress" && c.value == "allowed");
+            let forbidden = self
+                .caveats
+                .iter()
+                .any(|c| c.key == "cloud_egress" && c.value == "forbidden");
+            Some(Authorization {
+                read,
+                write,
+                admin,
+                max_records,
+                topics,
+                cloud_egress: granted && !forbidden,
+                expires,
+            })
+        }
+    }
+
+    /// The effective authorization a capability token confers, after collapsing all caveats
+    /// with meet semantics. Produced by [`CapabilityToken::authorize`].
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Authorization {
+        read: bool,
+        write: bool,
+        admin: bool,
+        max_records: Option<usize>,
+        topics: std::collections::BTreeSet<String>,
+        cloud_egress: bool,
+        expires: Option<u64>,
+    }
+
+    impl Authorization {
+        /// May this token recall / read memory?
+        pub fn allows_read(&self) -> bool {
+            self.read
+        }
+        /// May this token write / remember memory? (Write does **not** imply read.)
+        pub fn allows_write(&self) -> bool {
+            self.write
+        }
+        /// May this token perform owner-level operations (forget, share)?
+        pub fn allows_admin(&self) -> bool {
+            self.admin
+        }
+        /// The retrieval cap, if any (the minimum across all `max_records` caveats).
+        pub fn max_records(&self) -> Option<usize> {
+            self.max_records
+        }
+        /// May context be disclosed to a cloud provider under this token?
+        pub fn permits_cloud_egress(&self) -> bool {
+            self.cloud_egress
+        }
+        /// Whether the token has expired at `now`.
+        pub fn is_expired(&self, now: u64) -> bool {
+            self.expires.is_some_and(|e| now >= e)
+        }
+        /// Does `text` satisfy every `scope_topic` caveat? With no topic caveat, all text
+        /// passes. Topic scoping is keyword-based over the memory's plaintext, so a token
+        /// scoped to a topic can only retrieve memories that actually mention it.
+        pub fn permits_topic(&self, text: &str) -> bool {
+            if self.topics.is_empty() {
+                return true;
+            }
+            let hay = text.to_lowercase();
+            self.topics.iter().all(|t| hay.contains(&t.to_lowercase()))
+        }
     }
 
     #[cfg(test)]
@@ -335,6 +458,66 @@ pub mod capability {
 
             // Wrong root key fails.
             assert!(!token.verify(&[9u8; 32]));
+        }
+
+        #[test]
+        fn authorization_uses_meet_semantics_across_caveats() {
+            let root = [3u8; 32];
+
+            // admin attenuated to read => read only (write/admin do NOT survive).
+            let t = CapabilityToken::issue(&root, vec![Caveat::new("capability", "memory:admin")])
+                .attenuate(Caveat::new("capability", "memory:read"));
+            let a = t.authorize(&root).unwrap();
+            assert!(a.allows_read() && !a.allows_write() && !a.allows_admin());
+
+            // write does NOT grant read (KS-010).
+            let w = CapabilityToken::issue(&root, vec![Caveat::new("capability", "memory:write")])
+                .authorize(&root)
+                .unwrap();
+            assert!(w.allows_write() && !w.allows_read());
+
+            // The MINIMUM max_records wins, not the first-listed (KS-008).
+            let t = CapabilityToken::issue(
+                &root,
+                vec![
+                    Caveat::new("capability", "memory:read"),
+                    Caveat::new("max_records", "50"),
+                ],
+            )
+            .attenuate(Caveat::new("max_records", "5"));
+            assert_eq!(t.authorize(&root).unwrap().max_records(), Some(5));
+
+            // cloud_egress: a later 'forbidden' overrides an earlier 'allowed'.
+            let t = CapabilityToken::issue(
+                &root,
+                vec![
+                    Caveat::new("capability", "memory:read"),
+                    Caveat::new("cloud_egress", "allowed"),
+                ],
+            )
+            .attenuate(Caveat::new("cloud_egress", "forbidden"));
+            assert!(!t.authorize(&root).unwrap().permits_cloud_egress());
+
+            // topic scoping is enforced over text (KS-007).
+            let scoped = CapabilityToken::issue(
+                &root,
+                vec![
+                    Caveat::new("capability", "memory:read"),
+                    Caveat::new("scope_topic", "health"),
+                ],
+            )
+            .authorize(&root)
+            .unwrap();
+            assert!(scoped.permits_topic("my health record"));
+            assert!(!scoped.permits_topic("my finances"));
+
+            // a token naming no capability, and a wrong root key, both fail.
+            assert!(CapabilityToken::issue(&root, vec![Caveat::new("max_records", "1")])
+                .authorize(&root)
+                .is_none());
+            assert!(CapabilityToken::issue(&root, vec![Caveat::new("capability", "memory:read")])
+                .authorize(&[9u8; 32])
+                .is_none());
         }
 
         #[test]

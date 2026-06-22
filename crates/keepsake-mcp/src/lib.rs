@@ -6,7 +6,7 @@
 
 use keepsake_core::CellId;
 use keepsake_crypto::Kek;
-use keepsake_firewall::capability::CapabilityToken;
+use keepsake_firewall::capability::{Authorization, CapabilityToken};
 use keepsake_retrieval::Embedder;
 use keepsake_vault::MemoryVault;
 use serde_json::{json, Value};
@@ -29,15 +29,36 @@ pub struct ToolRouter<E: Embedder> {
     vault: MemoryVault<E>,
     kek: Kek,
     cap_root: [u8; 32],
+    owner_session: bool,
 }
 
 impl<E: Embedder> ToolRouter<E> {
+    /// A router for the owner's own local client: unauthenticated `tools/call` is allowed
+    /// (the owner launched this process). Use [`ToolRouter::delegated`] to require a
+    /// capability token on every call when exposing the vault to an untrusted agent.
     pub fn new(vault: MemoryVault<E>, kek: Kek, cap_root: [u8; 32]) -> Self {
         ToolRouter {
             vault,
             kek,
             cap_root,
+            owner_session: true,
         }
+    }
+
+    /// A router for an untrusted client: every `tools/call` must carry a valid capability
+    /// token, enforced via [`ToolRouter::dispatch_authorized`].
+    pub fn delegated(vault: MemoryVault<E>, kek: Kek, cap_root: [u8; 32]) -> Self {
+        ToolRouter {
+            vault,
+            kek,
+            cap_root,
+            owner_session: false,
+        }
+    }
+
+    /// Whether unauthenticated `tools/call` is permitted (owner session).
+    pub fn owner_session(&self) -> bool {
+        self.owner_session
     }
 
     /// The list of exposed tool names.
@@ -117,8 +138,9 @@ impl<E: Embedder> ToolRouter<E> {
         }
     }
 
-    /// Dispatch under a capability token: verify it, enforce its caveats, then dispatch.
-    /// `now` is the current unix time (for `expires` checks).
+    /// Dispatch under a capability token: verify it, collapse its caveats to an
+    /// [`Authorization`] (meet semantics), enforce the per-tool permission, and — for recall —
+    /// clamp to `max_records` and filter to the token's `scope_topic`. `now` is unix time.
     pub fn dispatch_authorized(
         &mut self,
         token: &CapabilityToken,
@@ -126,61 +148,55 @@ impl<E: Embedder> ToolRouter<E> {
         tool: &str,
         args: &Value,
     ) -> Value {
-        if !token.verify(&self.cap_root) {
+        let Some(auth) = token.authorize(&self.cap_root) else {
             return json!({"error": "invalid capability token"});
+        };
+        if auth.is_expired(now) {
+            return json!({"error": "capability token expired"});
         }
-        if let Some(exp) = token.caveat("expires").and_then(|s| s.parse::<u64>().ok()) {
-            if now > exp {
-                return json!({"error": "capability token expired"});
-            }
-        }
-        if !capability_allows(
-            token.caveat("capability").unwrap_or(""),
-            required_capability(tool),
-        ) {
+        if !auth_allows_tool(&auth, tool) {
             return json!({"error": "capability not granted for this tool"});
         }
-
-        // Clamp a scoped recall to the token's max_records.
-        let mut args = args.clone();
         if tool == "saihm_recall" {
-            if let Some(max) = token
-                .caveat("max_records")
-                .and_then(|s| s.parse::<u64>().ok())
-            {
-                if let Some(obj) = args.as_object_mut() {
-                    let k = obj.get("k").and_then(|v| v.as_u64()).unwrap_or(4).min(max);
-                    obj.insert("k".to_string(), json!(k));
-                }
-            }
+            return self.authorized_recall(&auth, args);
         }
-        self.dispatch(tool, &args)
+        self.dispatch(tool, args)
+    }
+
+    /// Recall under a scoped token: fetch at most `max_records`, then drop any hit that does
+    /// not satisfy the token's `scope_topic` caveats.
+    fn authorized_recall(&self, auth: &Authorization, args: &Value) -> Value {
+        let query = args["query"].as_str().unwrap_or("");
+        let requested = args["k"].as_u64().unwrap_or(4) as usize;
+        let k = auth.max_records().map_or(requested, |m| requested.min(m));
+        match self.vault.recall(&self.kek, query, k) {
+            Ok(hits) => json!({
+                "hits": hits
+                    .iter()
+                    .filter(|(_, text)| auth.permits_topic(text))
+                    .map(|(id, text)| json!({"cell_id": cell_id_hex(id), "text": text}))
+                    .collect::<Vec<_>>()
+            }),
+            Err(_) => json!({"error": "store failure"}),
+        }
     }
 }
 
-/// The capability level a tool requires.
-fn required_capability(tool: &str) -> &'static str {
+/// Whether `auth` grants the permission a tool needs. Read, write, and admin are distinct —
+/// write does not imply read.
+fn auth_allows_tool(auth: &Authorization, tool: &str) -> bool {
     match tool {
-        "saihm_recall" | "saihm_status" => "read",
-        "saihm_remember" => "write",
-        _ => "admin",
+        "saihm_recall" | "saihm_status" => auth.allows_read(),
+        "saihm_remember" => auth.allows_write(),
+        _ => auth.allows_admin(),
     }
 }
 
-/// Whether a granted capability (`memory:read|write|admin`) covers `needed`.
-fn capability_allows(granted: &str, needed: &str) -> bool {
-    let level = |c: &str| match c {
-        "memory:read" => 1u8,
-        "memory:write" => 2,
-        "memory:admin" => 3,
-        _ => 0,
-    };
-    let need = match needed {
-        "read" => 1u8,
-        "write" => 2,
-        _ => 3,
-    };
-    level(granted) >= need
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn cell_id_hex(id: &CellId) -> String {
@@ -236,7 +252,26 @@ pub fn handle_message<E: Embedder>(router: &mut ToolRouter<E>, msg: &Value) -> O
                 .and_then(|p| p.get("arguments"))
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let result = router.dispatch(name, &args);
+            // Only the advertised tool surface is callable.
+            if !tool_definitions().iter().any(|t| t["name"] == name) {
+                return Some(json!({
+                    "jsonrpc": "2.0", "id": id,
+                    "error": {"code": -32601, "message": format!("unknown tool: {name}")}
+                }));
+            }
+            // A capability token in params is always enforced. Without one, only an owner
+            // session may call — otherwise every connected model would hold owner privileges.
+            let result = match params
+                .and_then(|p| p.get("capability"))
+                .and_then(|c| c.as_str())
+            {
+                Some(tok_hex) => match CapabilityToken::decode_hex(tok_hex) {
+                    Some(token) => router.dispatch_authorized(&token, now_unix(), name, &args),
+                    None => json!({"error": "malformed capability token"}),
+                },
+                None if router.owner_session() => router.dispatch(name, &args),
+                None => json!({"error": "capability token required"}),
+            };
             Some(json!({
                 "jsonrpc": "2.0", "id": id,
                 "result": {"content": [{"type": "text", "text": result.to_string()}]}
@@ -412,6 +447,108 @@ mod tests {
             1,
             "max_records caps the recall"
         );
+    }
+
+    #[test]
+    fn write_token_cannot_recall_and_read_token_cannot_write() {
+        use keepsake_firewall::capability::{CapabilityToken, Caveat};
+        let cap_root = test_cap_root();
+        let mut router = test_router();
+
+        let write =
+            CapabilityToken::issue(&cap_root, vec![Caveat::new("capability", "memory:write")]);
+        assert!(
+            router.dispatch_authorized(&write, 0, "saihm_recall", &json!({"query": "x"}))["error"]
+                .is_string(),
+            "a write token must not recall (write does not imply read)"
+        );
+
+        let read =
+            CapabilityToken::issue(&cap_root, vec![Caveat::new("capability", "memory:read")]);
+        assert!(
+            router.dispatch_authorized(&read, 0, "saihm_remember", &json!({"text": "x"}))["error"]
+                .is_string(),
+            "a read token must not write"
+        );
+    }
+
+    #[test]
+    fn scope_topic_filters_recall_results() {
+        use keepsake_firewall::capability::{CapabilityToken, Caveat};
+        let cap_root = test_cap_root();
+        let mut router = test_router();
+        router.dispatch(
+            "saihm_remember",
+            &json!({"text": "my health appointment is monday"}),
+        );
+        router.dispatch(
+            "saihm_remember",
+            &json!({"text": "my finance budget for april"}),
+        );
+
+        let scoped = CapabilityToken::issue(
+            &cap_root,
+            vec![
+                Caveat::new("capability", "memory:read"),
+                Caveat::new("scope_topic", "health"),
+            ],
+        );
+        let r =
+            router.dispatch_authorized(&scoped, 0, "saihm_recall", &json!({"query":"my","k":10}));
+        let hits = r["hits"].as_array().unwrap();
+        assert!(
+            hits.iter()
+                .all(|h| h["text"].as_str().unwrap().contains("health")),
+            "a topic-scoped token must only see memories about that topic"
+        );
+        assert!(!hits.is_empty(), "the on-topic memory is still retrievable");
+    }
+
+    #[test]
+    fn tools_call_requires_a_token_in_delegated_mode_and_restricts_surface() {
+        use keepsake_firewall::capability::{CapabilityToken, Caveat};
+        let roots = RootKeys::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+        let kek = Kek::from_root(&roots.encryption_root);
+        let vault =
+            MemoryVault::new(SqliteVault::open_in_memory().unwrap(), MockEmbedder::new(64));
+        let mut router = ToolRouter::delegated(vault, kek, roots.capability_root());
+
+        // No token on a delegated router => refused.
+        let no_tok = handle_message(
+            &mut router,
+            &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"saihm_recall","arguments":{"query":"x"}}}),
+        )
+        .unwrap();
+        assert!(no_tok["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("capability token required"));
+
+        // A valid read token => allowed.
+        let read = CapabilityToken::issue(
+            &roots.capability_root(),
+            vec![Caveat::new("capability", "memory:read")],
+        );
+        let ok = handle_message(
+            &mut router,
+            &json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"saihm_recall","arguments":{"query":"x"},"capability": read.encode_hex()}}),
+        )
+        .unwrap();
+        assert!(ok["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("hits"));
+
+        // An un-advertised tool is rejected regardless of session.
+        let bad = handle_message(
+            &mut router,
+            &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"saihm_share","arguments":{}}}),
+        )
+        .unwrap();
+        assert!(bad["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown tool"));
     }
 
     #[test]

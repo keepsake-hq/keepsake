@@ -5,7 +5,10 @@
 //! authorization. The async HTTP server and the Ollama backend build on top of it.
 
 use keepsake_crypto::Kek;
-use keepsake_firewall::{capability::CapabilityToken, PrivacyDial, ReceiptLog};
+use keepsake_firewall::{
+    capability::{Authorization, CapabilityToken},
+    PrivacyDial, ReceiptLog,
+};
 use keepsake_retrieval::Embedder;
 use keepsake_store_sqlite::StoreError;
 use keepsake_vault::MemoryVault;
@@ -43,11 +46,17 @@ pub fn augment_with_memory<E: Embedder>(
     kek: &Kek,
     req: &ChatRequest,
     k: usize,
+    auth: Option<&Authorization>,
 ) -> Result<ChatRequest, StoreError> {
     let Some(query) = last_user_message(req) else {
         return Ok(req.clone());
     };
-    let hits = vault.recall(kek, query, k)?;
+    // Drop any hit the token's scope_topic does not permit (owner = no filter).
+    let hits: Vec<_> = vault
+        .recall(kek, query, k)?
+        .into_iter()
+        .filter(|(_, text)| auth.is_none_or(|a| a.permits_topic(text)))
+        .collect();
     if hits.is_empty() {
         return Ok(req.clone());
     }
@@ -80,39 +89,45 @@ pub fn parse_dial(header: Option<&str>) -> PrivacyDial {
     header.and_then(PrivacyDial::parse).unwrap_or_default()
 }
 
-/// Resolve the retrieval limit from an optional `X-Keepsake-Capability` header.
-/// `Ok(None)` = no token (the owner, unlimited); `Ok(Some(max))` = a verified scoped token;
-/// `Err` = a present-but-invalid token (the request must be rejected).
-pub fn capability_retrieval_limit(
+/// Resolve the authorization from an optional `X-Keepsake-Capability` header.
+/// `Ok(None)` = no token (the owner, full access); `Ok(Some(auth))` = a verified scoped token
+/// whose caveats gate the request; `Err` = a present-but-invalid token (reject the request).
+pub fn capability_authorization(
     header: Option<&str>,
     cap_root: &[u8; 32],
     now: u64,
-) -> Result<Option<usize>, &'static str> {
+) -> Result<Option<Authorization>, &'static str> {
     let Some(encoded) = header else {
         return Ok(None);
     };
     let Some(token) = CapabilityToken::decode_hex(encoded) else {
         return Err("malformed capability token");
     };
-    if !token.verify(cap_root) {
+    let Some(auth) = token.authorize(cap_root) else {
         return Err("invalid capability token");
+    };
+    if auth.is_expired(now) {
+        return Err("capability token expired");
     }
-    if let Some(exp) = token.caveat("expires").and_then(|s| s.parse::<u64>().ok()) {
-        if now > exp {
-            return Err("capability token expired");
-        }
+    Ok(Some(auth))
+}
+
+/// Which memory operations a request may perform. Owner (no token) gets full access; a scoped
+/// token gates each independently — a read token never writes back, a write token never
+/// injects recalled memory.
+pub struct MemoryPolicy {
+    pub inject: bool,
+    pub write_back: bool,
+    pub k: usize,
+}
+
+/// Compute the [`MemoryPolicy`] from the request's Privacy Dial and optional authorization.
+pub fn memory_policy(dial: PrivacyDial, auth: Option<&Authorization>) -> MemoryPolicy {
+    MemoryPolicy {
+        inject: dial.uses_memory() && auth.is_none_or(|a| a.allows_read()),
+        write_back: dial.uses_memory() && auth.is_none_or(|a| a.allows_write()),
+        k: auth.and_then(|a| a.max_records()).map_or(4, |m| m.min(4)),
     }
-    if !matches!(
-        token.caveat("capability"),
-        Some("memory:read" | "memory:write" | "memory:admin")
-    ) {
-        return Err("capability does not permit memory read");
-    }
-    let max = token
-        .caveat("max_records")
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(usize::MAX);
-    Ok(Some(max))
 }
 
 fn now_unix() -> u64 {
@@ -254,19 +269,20 @@ async fn chat_completions(
         Err(e) => return (StatusCode::BAD_REQUEST, format!("bad request: {e}\n")).into_response(),
     };
     let dial = parse_dial(header("x-keepsake-privacy"));
-    let k = match capability_retrieval_limit(
+    let auth = match capability_authorization(
         header("x-keepsake-capability"),
         &state.cap_root,
         now_unix(),
     ) {
-        Ok(limit) => limit.map(|m| m.min(4)).unwrap_or(4),
+        Ok(a) => a,
         Err(e) => return (StatusCode::FORBIDDEN, format!("{e}\n")).into_response(),
     };
+    let policy = memory_policy(dial, auth.as_ref());
 
-    // Inject retrieved memory unless the dial says No-Memory.
-    let mut augmented = if dial.uses_memory() {
+    // Inject retrieved memory only if the dial and the token both permit reading it.
+    let mut augmented = if policy.inject {
         let vault = state.vault.lock().await;
-        match augment_with_memory(&vault, &state.kek, &req, k) {
+        match augment_with_memory(&vault, &state.kek, &req, policy.k, auth.as_ref()) {
             Ok(a) => a,
             Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "vault error\n").into_response(),
         }
@@ -291,8 +307,8 @@ async fn chat_completions(
     let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
     let text = resp.text().await.unwrap_or_default();
 
-    // Write-back the user's turn (unless No-Memory), then record a signed Memory Receipt.
-    if dial.uses_memory() {
+    // Write-back the user's turn only if the dial and the token both permit writing.
+    if policy.write_back {
         let mut vault = state.vault.lock().await;
         let _ = write_back(&mut vault, &state.kek, &req);
     }
@@ -368,7 +384,7 @@ mod tests {
         vault.remember(&kek, "alpha alpha alpha").unwrap();
 
         let req = user_req("alpha alpha alpha");
-        let aug = augment_with_memory(&vault, &kek, &req, 1).unwrap();
+        let aug = augment_with_memory(&vault, &kek, &req, 1, None).unwrap();
 
         assert_eq!(aug.messages.len(), 2);
         assert_eq!(aug.messages[0].role, "system");
@@ -382,7 +398,7 @@ mod tests {
         let kek = test_kek();
         let vault = memory_vault();
         let req = user_req("nothing is stored yet");
-        let aug = augment_with_memory(&vault, &kek, &req, 3).unwrap();
+        let aug = augment_with_memory(&vault, &kek, &req, 3, None).unwrap();
         assert_eq!(aug.messages.len(), 1);
     }
 
@@ -427,17 +443,16 @@ mod tests {
     }
 
     #[test]
-    fn capability_limit_enforces_scope() {
+    fn capability_authorization_resolves_and_rejects() {
         use keepsake_firewall::capability::{CapabilityToken, Caveat};
         let cap_root = [5u8; 32];
 
-        // No header => the owner, unlimited.
-        assert_eq!(
-            capability_retrieval_limit(None, &cap_root, 0).unwrap(),
-            None
-        );
+        // No header => the owner, full access.
+        assert!(capability_authorization(None, &cap_root, 0)
+            .unwrap()
+            .is_none());
 
-        // A valid read token caps the retrieval.
+        // A valid read token, scoped to 2 records.
         let tok = CapabilityToken::issue(
             &cap_root,
             vec![
@@ -445,15 +460,16 @@ mod tests {
                 Caveat::new("max_records", "2"),
             ],
         );
-        assert_eq!(
-            capability_retrieval_limit(Some(&tok.encode_hex()), &cap_root, 0).unwrap(),
-            Some(2)
-        );
+        let auth = capability_authorization(Some(&tok.encode_hex()), &cap_root, 0)
+            .unwrap()
+            .unwrap();
+        assert!(auth.allows_read() && !auth.allows_write());
+        assert_eq!(auth.max_records(), Some(2));
 
         // Forged, expired, and malformed tokens are all rejected.
         let forged =
             CapabilityToken::issue(&[0u8; 32], vec![Caveat::new("capability", "memory:admin")]);
-        assert!(capability_retrieval_limit(Some(&forged.encode_hex()), &cap_root, 0).is_err());
+        assert!(capability_authorization(Some(&forged.encode_hex()), &cap_root, 0).is_err());
         let expiring = CapabilityToken::issue(
             &cap_root,
             vec![
@@ -461,7 +477,35 @@ mod tests {
                 Caveat::new("expires", "10"),
             ],
         );
-        assert!(capability_retrieval_limit(Some(&expiring.encode_hex()), &cap_root, 100).is_err());
-        assert!(capability_retrieval_limit(Some("zz"), &cap_root, 0).is_err());
+        assert!(capability_authorization(Some(&expiring.encode_hex()), &cap_root, 100).is_err());
+        assert!(capability_authorization(Some("zz"), &cap_root, 0).is_err());
+    }
+
+    #[test]
+    fn memory_policy_gates_read_and_write_independently() {
+        use keepsake_firewall::capability::{CapabilityToken, Caveat};
+        let root = [5u8; 32];
+        let read = CapabilityToken::issue(&root, vec![Caveat::new("capability", "memory:read")])
+            .authorize(&root)
+            .unwrap();
+        let write = CapabilityToken::issue(&root, vec![Caveat::new("capability", "memory:write")])
+            .authorize(&root)
+            .unwrap();
+
+        // Owner: both ops, default retrieval of 4.
+        let p = memory_policy(PrivacyDial::LocalOnly, None);
+        assert!(p.inject && p.write_back && p.k == 4);
+
+        // Read token: injects, but never writes back (KS-009).
+        let p = memory_policy(PrivacyDial::LocalOnly, Some(&read));
+        assert!(p.inject && !p.write_back);
+
+        // Write token: writes back, but never injects recalled memory (KS-010).
+        let p = memory_policy(PrivacyDial::LocalOnly, Some(&write));
+        assert!(!p.inject && p.write_back);
+
+        // No-Memory dial: neither, regardless of the token.
+        let p = memory_policy(PrivacyDial::NoMemory, Some(&read));
+        assert!(!p.inject && !p.write_back);
     }
 }
