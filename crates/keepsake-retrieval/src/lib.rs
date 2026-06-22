@@ -57,10 +57,23 @@ impl VectorIndex {
     }
 }
 
+/// A local embedding model failure (model error, poisoned lock, or empty output).
+#[derive(Debug)]
+pub struct EmbedError(pub String);
+
+impl std::fmt::Display for EmbedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "embedding failed: {}", self.0)
+    }
+}
+
+impl std::error::Error for EmbedError {}
+
 /// A local embedding model: text in, vector out. Implementations must keep all
-/// computation on-device (no network at inference time).
+/// computation on-device (no network at inference time). Returns [`EmbedError`] instead of
+/// panicking when the model fails.
 pub trait Embedder {
-    fn embed(&self, text: &str) -> Vec<f32>;
+    fn embed(&self, text: &str) -> Result<Vec<f32>, EmbedError>;
     fn dimensions(&self) -> usize;
 }
 
@@ -77,12 +90,12 @@ impl MockEmbedder {
 }
 
 impl Embedder for MockEmbedder {
-    fn embed(&self, text: &str) -> Vec<f32> {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
         let mut v = vec![0.0f32; self.dim];
         for byte in text.bytes() {
             v[byte as usize % self.dim] += 1.0;
         }
-        v
+        Ok(v)
     }
 
     fn dimensions(&self) -> usize {
@@ -132,7 +145,7 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
 pub use fast::FastEmbedder;
 
 mod fast {
-    use super::Embedder;
+    use super::{EmbedError, Embedder};
     use fastembed::{
         EmbeddingModel, InitOptionsUserDefined, Pooling, TextEmbedding, TextInitOptions,
         TokenizerFiles, UserDefinedEmbeddingModel,
@@ -216,15 +229,17 @@ mod fast {
     }
 
     impl Embedder for FastEmbedder {
-        fn embed(&self, text: &str) -> Vec<f32> {
-            self.model
+        fn embed(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
+            let mut model = self
+                .model
                 .lock()
-                .expect("embedder mutex poisoned")
+                .map_err(|_| EmbedError("embedder mutex poisoned".into()))?;
+            model
                 .embed(vec![text], None)
-                .expect("fastembed embedding failed")
+                .map_err(|e| EmbedError(e.to_string()))?
                 .into_iter()
                 .next()
-                .expect("one input yields one embedding")
+                .ok_or_else(|| EmbedError("model returned no embedding".into()))
         }
 
         fn dimensions(&self) -> usize {
@@ -285,9 +300,12 @@ mod tests {
     fn mock_embedder_is_deterministic_and_content_sensitive() {
         let e = MockEmbedder::new(64);
         assert_eq!(e.dimensions(), 64);
-        assert_eq!(e.embed("hello world"), e.embed("hello world"));
-        assert_ne!(e.embed("cat"), e.embed("dog"));
-        assert_eq!(e.embed("anything").len(), 64);
+        assert_eq!(
+            e.embed("hello world").unwrap(),
+            e.embed("hello world").unwrap()
+        );
+        assert_ne!(e.embed("cat").unwrap(), e.embed("dog").unwrap());
+        assert_eq!(e.embed("anything").unwrap().len(), 64);
     }
 
     #[test]
@@ -303,6 +321,6 @@ mod tests {
     fn fastembed_bge_small_embeds_with_expected_dim() {
         let e = FastEmbedder::bge_small().unwrap();
         assert_eq!(e.dimensions(), 384);
-        assert_eq!(e.embed("hello world").len(), 384);
+        assert_eq!(e.embed("hello world").unwrap().len(), 384);
     }
 }

@@ -11,6 +11,8 @@ fn main() {
     eprintln!("warming Nomic into {} ...", dir.display());
 
     let embedder = FastEmbedder::nomic_cached(dir).expect("load Nomic");
-    let v = embedder.embed("keepsake offline warm-up");
+    let v = embedder
+        .embed("keepsake offline warm-up")
+        .expect("embed warm-up text");
     println!("ok: nomic ready, embedding dim = {}", v.len());
 }

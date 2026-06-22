@@ -19,6 +19,8 @@ pub enum StoreError {
     Crypto(CryptoError),
     /// A stored field had an unexpected length (corruption).
     Corrupt,
+    /// A local embedding model failure.
+    Embed(String),
 }
 
 impl From<rusqlite::Error> for StoreError {

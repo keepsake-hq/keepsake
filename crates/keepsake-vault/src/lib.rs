@@ -78,7 +78,10 @@ impl<E: Embedder> MemoryVault<E> {
     /// Store `text` as an encrypted cell and index its embedding. Returns the id.
     pub fn remember(&mut self, kek: &Kek, text: &str) -> Result<CellId, StoreError> {
         let id = self.store.remember(kek, text.as_bytes())?;
-        let vector = self.embedder.embed(text);
+        let vector = self
+            .embedder
+            .embed(text)
+            .map_err(|e| StoreError::Embed(e.to_string()))?;
         self.index.add(id.clone(), &vector);
         Ok(id)
     }
@@ -91,7 +94,10 @@ impl<E: Embedder> MemoryVault<E> {
         query: &str,
         k: usize,
     ) -> Result<Vec<(CellId, String)>, StoreError> {
-        let query_vec = self.embedder.embed(query);
+        let query_vec = self
+            .embedder
+            .embed(query)
+            .map_err(|e| StoreError::Embed(e.to_string()))?;
         let mut out = Vec::new();
         for (id, _score) in self.index.search(&query_vec, k) {
             if let Some(bytes) = self.store.recall(kek, &id)? {
@@ -189,7 +195,11 @@ impl<E: Embedder> MemoryVault<E> {
         for id in self.store.live_cell_ids()? {
             if let Some(bytes) = self.store.recall(kek, &id)? {
                 if let Ok(text) = String::from_utf8(bytes) {
-                    index.add(id, &self.embedder.embed(&text));
+                    let vector = self
+                        .embedder
+                        .embed(&text)
+                        .map_err(|e| StoreError::Embed(e.to_string()))?;
+                    index.add(id, &vector);
                 }
             }
         }
