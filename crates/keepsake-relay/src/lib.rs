@@ -119,6 +119,9 @@ pub fn app(token: String, store: BlobStore) -> Router {
     Router::new()
         .route("/v1/blob/{slot}", put(put_blob).get(get_blob))
         .route("/health", get(|| async { "ok" }))
+        .layer(axum::extract::DefaultBodyLimit::max(
+            keepsake_sync::MAX_SNAPSHOT_BYTES,
+        ))
         .with_state(state)
 }
 
@@ -229,6 +232,13 @@ impl RelayClient {
         if !resp.status().is_success() {
             return Err(RelayError::Status(resp.status().as_u16()));
         }
+        // Guard against a malicious relay returning an enormous body (KS-013).
+        if resp
+            .content_length()
+            .is_some_and(|len| len > keepsake_sync::MAX_SNAPSHOT_BYTES as u64)
+        {
+            return Err(RelayError::Status(413));
+        }
         Ok(Some(resp.bytes().await?.to_vec()))
     }
 }
@@ -238,9 +248,10 @@ pub async fn push_snapshot(
     client: &RelayClient,
     slot: &str,
     vault: &SqliteVault,
+    sync_key: &[u8; 32],
 ) -> Result<(), RelayError> {
     client
-        .push(slot, SyncState::from_vault(vault)?.to_bytes())
+        .push(slot, SyncState::from_vault(vault)?.seal(sync_key))
         .await
 }
 
@@ -249,13 +260,11 @@ pub async fn pull_and_apply(
     client: &RelayClient,
     slot: &str,
     vault: &SqliteVault,
+    sync_key: &[u8; 32],
 ) -> Result<bool, RelayError> {
     match client.pull(slot).await? {
-        Some(bytes) => match SyncState::from_bytes(&bytes) {
-            Some(state) => {
-                state.apply_to(vault)?;
-                Ok(true)
-            }
+        Some(bytes) => match SyncState::open(&bytes, sync_key) {
+            Some(state) => Ok(state.apply_to(vault, slot)?),
             None => Ok(false),
         },
         None => Ok(false),
@@ -324,12 +333,19 @@ mod tests {
         let client = RelayClient::new(&base, "t");
         let kek = test_kek();
 
+        let key = RootKeys::from_mnemonic(TEST_MNEMONIC, "")
+            .unwrap()
+            .sync_mac_key();
         let a = SqliteVault::open_in_memory().unwrap();
         let b = SqliteVault::open_in_memory().unwrap();
         let id = a.remember(&kek, b"network sync works").unwrap();
 
-        push_snapshot(&client, "vault-channel", &a).await.unwrap();
-        assert!(pull_and_apply(&client, "vault-channel", &b).await.unwrap());
+        push_snapshot(&client, "vault-channel", &a, &key)
+            .await
+            .unwrap();
+        assert!(pull_and_apply(&client, "vault-channel", &b, &key)
+            .await
+            .unwrap());
         assert_eq!(
             b.recall(&kek, &id).unwrap().as_deref(),
             Some(&b"network sync works"[..])
@@ -337,8 +353,12 @@ mod tests {
 
         // forget on A, re-push, re-apply: B loses it (erasure propagates over the wire).
         a.forget(&id).unwrap();
-        push_snapshot(&client, "vault-channel", &a).await.unwrap();
-        pull_and_apply(&client, "vault-channel", &b).await.unwrap();
+        push_snapshot(&client, "vault-channel", &a, &key)
+            .await
+            .unwrap();
+        pull_and_apply(&client, "vault-channel", &b, &key)
+            .await
+            .unwrap();
         assert_eq!(b.recall(&kek, &id).unwrap(), None);
     }
 }

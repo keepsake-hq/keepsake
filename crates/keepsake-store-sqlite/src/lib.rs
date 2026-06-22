@@ -83,7 +83,8 @@ impl SqliteVault {
                  cell_id    BLOB PRIMARY KEY,
                  wrap_nonce BLOB NOT NULL,
                  wrapped    BLOB NOT NULL
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS sync_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL);",
         )?;
         // Back-fill the column on vaults created before `created_at` existed; errors
         // (the column already exists) are expected and ignored.
@@ -263,6 +264,12 @@ impl SqliteVault {
     /// Import a synced record. Skips the cell if it is locally tombstoned — **erasure
     /// always wins**, so a straggler record can never resurrect a forgotten cell.
     pub fn import_record(&self, rec: &CellRecord) -> Result<(), StoreError> {
+        // Bind the claimed id to the ciphertext (content address). A synced record whose
+        // cell_id does not match its own ciphertext is forged or corrupt — drop it, so it
+        // cannot insert under an attacker-chosen id or overwrite another cell's key row.
+        if CellId::of_ciphertext(&rec.ciphertext).as_bytes() != &rec.cell_id {
+            return Ok(());
+        }
         let id = &rec.cell_id[..];
         let tomb: Option<i64> = self
             .conn
@@ -289,6 +296,42 @@ impl SqliteVault {
     /// Apply a synced tombstone: forget the cell id locally (erasure).
     pub fn apply_tombstone(&self, cell_id: &[u8; 32]) -> Result<(), StoreError> {
         self.forget(&CellId::from_bytes(*cell_id))
+    }
+
+    /// Atomically read-and-increment this vault's monotonic send-epoch counter. Each sync
+    /// snapshot this vault produces carries a strictly greater epoch, so a relay cannot
+    /// replay an older snapshot onto a device that has already applied a newer one.
+    pub fn next_send_epoch(&self) -> Result<u64, StoreError> {
+        let epoch: i64 = self.conn.query_row(
+            "INSERT INTO sync_meta (k, v) VALUES ('send_epoch', 1)
+             ON CONFLICT(k) DO UPDATE SET v = v + 1 RETURNING v",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(epoch as u64)
+    }
+
+    /// The highest snapshot epoch this vault has applied from `stream` (0 if none).
+    pub fn seen_epoch(&self, stream: &str) -> Result<u64, StoreError> {
+        let v: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT v FROM sync_meta WHERE k = ?1",
+                params![format!("seen:{stream}")],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(v.unwrap_or(0) as u64)
+    }
+
+    /// Record that this vault has applied snapshot `epoch` from `stream`.
+    pub fn set_seen_epoch(&self, stream: &str, epoch: u64) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO sync_meta (k, v) VALUES (?1, ?2)
+             ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            params![format!("seen:{stream}"), epoch as i64],
+        )?;
+        Ok(())
     }
 
     /// List the ids of all live (non-tombstoned) cells.
@@ -493,5 +536,33 @@ mod tests {
             None,
             "a tombstone must keep an erased cell erased"
         );
+    }
+
+    #[test]
+    fn import_record_rejects_a_forged_cell_id() {
+        let kek = test_kek();
+        let a = SqliteVault::open_in_memory().unwrap();
+        a.remember(&kek, b"genuine").unwrap();
+        let mut rec = a.export_live_records().unwrap().into_iter().next().unwrap();
+        // Forge the id to a value that does not match the ciphertext.
+        rec.cell_id = [0xABu8; 32];
+
+        let b = SqliteVault::open_in_memory().unwrap();
+        b.import_record(&rec).unwrap();
+        assert!(
+            b.live_cell_ids().unwrap().is_empty(),
+            "a record whose cell_id does not match its ciphertext must be dropped"
+        );
+    }
+
+    #[test]
+    fn send_epoch_is_strictly_monotonic_and_seen_epoch_persists() {
+        let v = SqliteVault::open_in_memory().unwrap();
+        assert_eq!(v.next_send_epoch().unwrap(), 1);
+        assert_eq!(v.next_send_epoch().unwrap(), 2);
+        assert_eq!(v.next_send_epoch().unwrap(), 3);
+        assert_eq!(v.seen_epoch("chan").unwrap(), 0);
+        v.set_seen_epoch("chan", 5).unwrap();
+        assert_eq!(v.seen_epoch("chan").unwrap(), 5);
     }
 }

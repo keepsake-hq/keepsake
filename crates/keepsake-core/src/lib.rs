@@ -18,8 +18,14 @@ pub struct CellId([u8; 32]);
 impl CellId {
     /// Derive the id from a sealed cell (hash of the ciphertext).
     pub fn of(cell: &SealedCell) -> CellId {
+        CellId::of_ciphertext(&cell.ciphertext)
+    }
+
+    /// Derive the id directly from ciphertext bytes — the content address. Used to verify
+    /// that a synced record's claimed `cell_id` actually matches its own ciphertext.
+    pub fn of_ciphertext(ciphertext: &[u8]) -> CellId {
         let mut hasher = Sha256::new();
-        hasher.update(&cell.ciphertext);
+        hasher.update(ciphertext);
         let mut id = [0u8; 32];
         id.copy_from_slice(&hasher.finalize());
         CellId(id)

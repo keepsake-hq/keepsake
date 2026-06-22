@@ -8,6 +8,7 @@
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::Sha256;
@@ -87,6 +88,17 @@ impl RootKeys {
         let hk = Hkdf::<Sha256>::new(None, &self.signing_root);
         let mut k = [0u8; 32];
         hk.expand(b"keepsake/v1/capability-root", &mut k)
+            .expect("32 bytes is a valid HKDF-SHA256 output length");
+        k
+    }
+
+    /// The shared key that authenticates sync snapshots between a user's own devices.
+    /// Derived from `device_root`, so every device holding the seed computes the same key —
+    /// while a relay (which never sees the seed) cannot forge a snapshot's MAC.
+    pub fn sync_mac_key(&self) -> [u8; 32] {
+        let hk = Hkdf::<Sha256>::new(None, &self.device_root);
+        let mut k = [0u8; 32];
+        hk.expand(b"keepsake/v1/sync-mac", &mut k)
             .expect("32 bytes is a valid HKDF-SHA256 output length");
         k
     }
@@ -421,6 +433,27 @@ pub fn ml_dsa_verify(verifying_key: &[u8], msg: &[u8], signature: &[u8]) -> bool
         return false;
     };
     vk.verify(msg, &sig).is_ok()
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// HMAC-SHA256 of `data` under `key` — authenticates a sync snapshot so that only a holder
+/// of the seed-derived [`RootKeys::sync_mac_key`] (one of the user's own devices) can produce
+/// a valid tag. A relay, which never sees the seed, cannot forge one.
+pub fn sync_mac(key: &[u8; 32], data: &[u8]) -> [u8; 32] {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC accepts a 32-byte key");
+    mac.update(data);
+    let tag = mac.finalize().into_bytes();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&tag);
+    out
+}
+
+/// Constant-time verification of a [`sync_mac`] tag.
+pub fn sync_mac_verify(key: &[u8; 32], data: &[u8], tag: &[u8]) -> bool {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC accepts a 32-byte key");
+    mac.update(data);
+    mac.verify_slice(tag).is_ok()
 }
 
 /// SLIP-0039-style social recovery: Shamir Secret Sharing of the 32-byte master entropy
