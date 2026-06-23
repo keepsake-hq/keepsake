@@ -44,6 +44,10 @@ pub struct CellRecord {
     pub ciphertext: Vec<u8>,
     pub wrap_nonce: [u8; 12],
     pub wrapped: Vec<u8>,
+    /// Provenance (where the memory came from). `#[serde(default)]` so snapshots written before
+    /// this field existed still deserialize.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// A portable "memory passport": every live cell's **sealed** record plus the tombstones. Inert
@@ -286,7 +290,7 @@ impl SqliteVault {
     /// Export all live cells with their wrapped keys (state-based sync snapshot).
     pub fn export_live_records(&self) -> Result<Vec<CellRecord>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT c.cell_id, c.nonce, c.ciphertext, k.wrap_nonce, k.wrapped
+            "SELECT c.cell_id, c.nonce, c.ciphertext, k.wrap_nonce, k.wrapped, c.source
              FROM cells c JOIN key_manifest k ON c.cell_id = k.cell_id
              WHERE c.cell_id NOT IN (SELECT cell_id FROM tombstones)",
         )?;
@@ -297,11 +301,12 @@ impl SqliteVault {
                 row.get::<_, Vec<u8>>(2)?,
                 row.get::<_, Vec<u8>>(3)?,
                 row.get::<_, Vec<u8>>(4)?,
+                row.get::<_, Option<String>>(5)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (cid, nonce, ct, wn, wrapped) = row?;
+            let (cid, nonce, ct, wn, wrapped, source) = row?;
             out.push(CellRecord {
                 cell_id: cid.as_slice().try_into().map_err(|_| StoreError::Corrupt)?,
                 nonce: nonce
@@ -311,6 +316,7 @@ impl SqliteVault {
                 ciphertext: ct,
                 wrap_nonce: wn.as_slice().try_into().map_err(|_| StoreError::Corrupt)?,
                 wrapped,
+                source,
             });
         }
         Ok(out)
@@ -353,8 +359,8 @@ impl SqliteVault {
             return Ok(());
         }
         self.conn.execute(
-            "INSERT OR IGNORE INTO cells (cell_id, nonce, ciphertext) VALUES (?1, ?2, ?3)",
-            params![id, &rec.nonce[..], rec.ciphertext],
+            "INSERT OR IGNORE INTO cells (cell_id, nonce, ciphertext, source) VALUES (?1, ?2, ?3, ?4)",
+            params![id, &rec.nonce[..], rec.ciphertext, rec.source],
         )?;
         self.conn.execute(
             "INSERT OR REPLACE INTO key_manifest (cell_id, wrap_nonce, wrapped) VALUES (?1, ?2, ?3)",
@@ -632,6 +638,27 @@ mod tests {
         let edges = vault.live_edges().unwrap();
         assert_eq!(edges.len(), 1, "forgetting cell a cascades to drop its edge");
         assert_eq!(edges[0].3, "Eduard", "only cell b's edge remains");
+    }
+
+    #[test]
+    fn provenance_source_survives_export_import() {
+        let kek = test_kek();
+        let a = SqliteVault::open_in_memory().unwrap();
+        let id = a
+            .remember_with_source(&kek, b"tagged memory", 100, Some("mcp:claude"))
+            .unwrap();
+        let records = a.export_live_records().unwrap();
+        assert_eq!(records[0].source.as_deref(), Some("mcp:claude"));
+
+        let b = SqliteVault::open_in_memory().unwrap();
+        for rec in &records {
+            b.import_record(rec).unwrap();
+        }
+        assert_eq!(
+            b.source(&id).unwrap().as_deref(),
+            Some("mcp:claude"),
+            "provenance carries across a device sync"
+        );
     }
 
     #[test]
