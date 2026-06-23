@@ -5,7 +5,8 @@
 //! [`DaemonState::handle`] is the transport-agnostic JSON-RPC core (synchronous, easy to
 //! test); a Unix-socket server wraps it so many clients share one vault and one live index.
 
-use std::sync::Mutex;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use keepsake_core::CellId;
 use keepsake_crypto::Kek;
@@ -13,6 +14,8 @@ use keepsake_firewall::capability::{Authorization, CapabilityToken};
 use keepsake_retrieval::Embedder;
 use keepsake_vault::MemoryVault;
 use serde_json::{json, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::net::{UnixListener, UnixStream};
 
 /// One unlocked vault (+ its live index) behind a mutex, the key-encryption-key, and the
 /// capability root used to verify client tokens. Shared by every connected client.
@@ -181,6 +184,46 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Serve the daemon over a Unix socket: one shared vault, many clients, newline-delimited
+/// JSON-RPC. Each connection runs concurrently and every request goes through
+/// [`DaemonState::handle`], so all clients read and write the SAME live index — a memory
+/// written by one client is immediately visible to another, with no restart.
+pub async fn serve<E>(state: Arc<DaemonState<E>>, socket_path: &Path) -> std::io::Result<()>
+where
+    E: Embedder + Send + Sync + 'static,
+{
+    let _ = std::fs::remove_file(socket_path); // clear a stale socket from a previous run
+    let listener = UnixListener::bind(socket_path)?;
+    loop {
+        let (stream, _addr) = listener.accept().await?;
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            let _ = serve_connection(state, stream).await;
+        });
+    }
+}
+
+async fn serve_connection<E>(state: Arc<DaemonState<E>>, stream: UnixStream) -> std::io::Result<()>
+where
+    E: Embedder + Send + Sync + 'static,
+{
+    let (read_half, mut write_half) = stream.into_split();
+    let mut lines = tokio::io::BufReader::new(read_half).lines();
+    while let Some(line) = lines.next_line().await? {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = match serde_json::from_str::<Value>(&line) {
+            Ok(req) => state.handle(&req),
+            Err(e) => rpc_error(Value::Null, -32700, &format!("parse error: {e}")),
+        };
+        let mut bytes = serde_json::to_vec(&response).unwrap_or_else(|_| b"{}".to_vec());
+        bytes.push(b'\n');
+        write_half.write_all(&bytes).await?;
+    }
+    Ok(())
+}
+
 fn rpc_ok(id: Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
@@ -273,5 +316,62 @@ mod tests {
         // A garbage / tampered token is rejected outright.
         let r = state.handle(&recall_req("delta", 1, Some("deadbeef")));
         assert!(r["error"].is_object(), "garbage token rejected: {r}");
+    }
+
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::UnixStream;
+
+    async fn connect(sock: &std::path::Path) -> UnixStream {
+        for _ in 0..40 {
+            if let Ok(s) = UnixStream::connect(sock).await {
+                return s;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("daemon did not start accepting connections");
+    }
+
+    async fn send_recv(stream: &mut UnixStream, req: &Value) -> Value {
+        let mut bytes = serde_json::to_vec(req).unwrap();
+        bytes.push(b'\n');
+        stream.write_all(&bytes).await.unwrap();
+        let mut buf = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            let n = stream.read(&mut byte).await.unwrap();
+            if n == 0 || byte[0] == b'\n' {
+                break;
+            }
+            buf.push(byte[0]);
+        }
+        serde_json::from_slice(&buf).unwrap()
+    }
+
+    #[tokio::test]
+    async fn two_clients_share_one_live_vault_over_the_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        let state = Arc::new(test_state().0);
+        {
+            let state = Arc::clone(&state);
+            let sock = sock.clone();
+            tokio::spawn(async move { serve(state, &sock).await.unwrap() });
+        }
+
+        // Client A writes a memory…
+        let mut a = connect(&sock).await;
+        let r = send_recv(&mut a, &remember_req("golf golf golf", None)).await;
+        assert!(r["result"]["cell_id"].is_string(), "client A remembers: {r}");
+
+        // …and a SEPARATE client B recalls it live, without any restart.
+        let mut b = connect(&sock).await;
+        let r = send_recv(&mut b, &recall_req("golf golf golf", 1, None)).await;
+        assert_eq!(
+            r["result"]["hits"].as_array().map(Vec::len),
+            Some(1),
+            "client B sees A's memory live over a separate connection: {r}"
+        );
     }
 }
