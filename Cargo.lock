@@ -1705,10 +1705,14 @@ dependencies = [
  "hex",
  "keepsake-core",
  "keepsake-crypto",
+ "keepsake-daemon",
+ "keepsake-firewall",
  "keepsake-retrieval",
  "keepsake-store-sqlite",
  "keepsake-vault",
  "rand 0.8.6",
+ "serde_json",
+ "tokio",
  "zeroize",
 ]
 
@@ -1804,6 +1808,7 @@ dependencies = [
  "axum",
  "hex",
  "keepsake-crypto",
+ "keepsake-daemon",
  "keepsake-firewall",
  "keepsake-retrieval",
  "keepsake-store-sqlite",
@@ -1812,6 +1817,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
