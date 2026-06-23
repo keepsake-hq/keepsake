@@ -30,6 +30,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
+          components: clippy
+
+      - name: Test gate — nothing ships unless clippy + tests are green
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
 
       - name: Cache cargo build (standalone workspace inside the app dir)
         uses: swatinem/rust-cache@v2
