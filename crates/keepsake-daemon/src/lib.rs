@@ -211,10 +211,10 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
-/// Serve the daemon over a Unix socket: one shared vault, many clients, newline-delimited
+/// Serve the daemon over a Unix socket: one shared vault, many local clients, newline-delimited
 /// JSON-RPC. Each connection runs concurrently and every request goes through
-/// [`DaemonState::handle`], so all clients read and write the SAME live index — a memory
-/// written by one client is immediately visible to another, with no restart.
+/// [`DaemonState::handle`], so all clients read and write the SAME live index. The Unix socket
+/// is user-private, so an owner connection without a token is allowed.
 pub async fn serve<E>(state: Arc<DaemonState<E>>, socket_path: &Path) -> std::io::Result<()>
 where
     E: Embedder + Send + Sync + 'static,
@@ -225,23 +225,65 @@ where
         let (stream, _addr) = listener.accept().await?;
         let state = Arc::clone(&state);
         tokio::spawn(async move {
-            let _ = serve_connection(state, stream).await;
+            let _ = serve_connection(state, stream, false).await;
         });
     }
 }
 
-async fn serve_connection<E>(state: Arc<DaemonState<E>>, stream: UnixStream) -> std::io::Result<()>
+/// Serve the daemon over TCP for remote / cloud agents (e.g. Hermes on a VPS). A capability
+/// token is REQUIRED on every request — the network is not user-private like the Unix socket —
+/// so bind to localhost by default and only expose it deliberately (e.g. over Tailscale/VPN).
+pub async fn serve_tcp<E>(
+    state: Arc<DaemonState<E>>,
+    addr: std::net::SocketAddr,
+) -> std::io::Result<()>
 where
     E: Embedder + Send + Sync + 'static,
 {
-    let (read_half, mut write_half) = stream.into_split();
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    loop {
+        let (stream, _peer) = listener.accept().await?;
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            let _ = serve_connection(state, stream, true).await;
+        });
+    }
+}
+
+/// Handle one client connection (Unix or TCP). When `require_token` is set, a request without a
+/// capability token is rejected — a network transport must always be authenticated.
+async fn serve_connection<E, S>(
+    state: Arc<DaemonState<E>>,
+    stream: S,
+    require_token: bool,
+) -> std::io::Result<()>
+where
+    E: Embedder + Send + Sync + 'static,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
+    let (read_half, mut write_half) = tokio::io::split(stream);
     let mut lines = tokio::io::BufReader::new(read_half).lines();
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
         }
         let response = match serde_json::from_str::<Value>(&line) {
-            Ok(req) => state.handle(&req),
+            Ok(req) => {
+                if require_token
+                    && req
+                        .get("params")
+                        .and_then(|p| p.get("capability"))
+                        .is_none()
+                {
+                    rpc_error(
+                        req.get("id").cloned().unwrap_or(Value::Null),
+                        -32001,
+                        "a capability token is required over the network",
+                    )
+                } else {
+                    state.handle(&req)
+                }
+            }
             Err(e) => rpc_error(Value::Null, -32700, &format!("parse error: {e}")),
         };
         let mut bytes = serde_json::to_vec(&response).unwrap_or_else(|_| b"{}".to_vec());
@@ -595,5 +637,65 @@ mod tests {
         );
         let r = reader.remember("nope").await.unwrap();
         assert!(r["error"].is_object(), "read token must not write: {r}");
+    }
+
+    #[tokio::test]
+    async fn tcp_network_mode_requires_a_token() {
+        use keepsake_firewall::capability::{CapabilityToken, Caveat};
+        use tokio::net::{TcpListener, TcpStream};
+
+        let (state, cap_root) = test_state();
+        let state = Arc::new(state);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        {
+            let state = Arc::clone(&state);
+            tokio::spawn(async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    let st = Arc::clone(&state);
+                    tokio::spawn(async move {
+                        let _ = serve_connection(st, stream, true).await;
+                    });
+                }
+            });
+        }
+
+        async fn rt(addr: std::net::SocketAddr, req: &Value) -> Value {
+            let mut s = TcpStream::connect(addr).await.unwrap();
+            let mut bytes = serde_json::to_vec(req).unwrap();
+            bytes.push(b'\n');
+            s.write_all(&bytes).await.unwrap();
+            let mut buf = Vec::new();
+            let mut b = [0u8; 1];
+            loop {
+                let n = s.read(&mut b).await.unwrap();
+                if n == 0 || b[0] == b'\n' {
+                    break;
+                }
+                buf.push(b[0]);
+            }
+            serde_json::from_slice(&buf).unwrap()
+        }
+
+        // No token over the network → rejected.
+        let r = rt(
+            addr,
+            &json!({"jsonrpc":"2.0","id":1,"method":"vault/status","params":{}}),
+        )
+        .await;
+        assert!(r["error"].is_object(), "network mode requires a token: {r}");
+
+        // A valid token → works.
+        let tok = CapabilityToken::issue(&cap_root, vec![Caveat::new("capability", "memory:admin")])
+            .encode_hex();
+        let r = rt(
+            addr,
+            &json!({"jsonrpc":"2.0","id":2,"method":"vault/remember","params":{"text":"papa papa papa","capability":tok}}),
+        )
+        .await;
+        assert!(
+            r["result"]["cell_id"].is_string(),
+            "a valid token works over the network: {r}"
+        );
     }
 }

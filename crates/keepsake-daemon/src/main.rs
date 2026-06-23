@@ -35,6 +35,20 @@ async fn main() {
         std::fs::create_dir_all(parent).expect("create socket directory");
     }
     spawn_consolidation(Arc::clone(&state), std::time::Duration::from_secs(300));
+    if let Ok(tcp) = std::env::var("KEEPSAKE_TCP") {
+        match tcp.parse::<std::net::SocketAddr>() {
+            Ok(addr) => {
+                let s = Arc::clone(&state);
+                tokio::spawn(async move {
+                    if let Err(e) = keepsake_daemon::serve_tcp(s, addr).await {
+                        eprintln!("keepsake-daemon TCP error: {e}");
+                    }
+                });
+                println!("keepsake-daemon also on tcp://{addr} (capability token required)");
+            }
+            Err(_) => eprintln!("KEEPSAKE_TCP must be an address like 127.0.0.1:8765"),
+        }
+    }
     println!("keepsake-daemon listening on {}", socket_path.display());
     serve(state, &socket_path).await.expect("daemon server error");
 }
