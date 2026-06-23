@@ -1,0 +1,36 @@
+# Keepsake blind relay — a dumb, zero-knowledge sync server. It stores only opaque, encrypted
+# snapshots keyed by an unguessable per-vault slot; it can never read anyone's memory. Multi-tenant:
+# one relay safely serves many users (each owns a write-token-protected slot, trust-on-first-use).
+#
+#   docker build -f Dockerfile.relay -t keepsake-relay .
+#   docker run -d --restart=always --name keepsake-relay \
+#       -e KEEPSAKE_RELAY_TOKEN="$(openssl rand -hex 32)" \
+#       -e KEEPSAKE_RELAY_BIND=0.0.0.0:8788 -e KEEPSAKE_RELAY_DB=/data/relay.db \
+#       -v keepsake-relay:/data -p 127.0.0.1:8788:8788 keepsake-relay
+#
+# Bind to 127.0.0.1 on the host and put a Cloudflare Tunnel (or any reverse proxy with TLS) in
+# front so the origin server's IP is never exposed. The relay only ever sees ciphertext.
+
+FROM rust:1-bookworm AS build
+# Keep the build gentle on a shared host.
+ENV CARGO_BUILD_JOBS=2
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+RUN cargo build --release -p keepsake-relay
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home keepsake \
+    && mkdir /data && chown keepsake /data
+COPY --from=build /src/target/release/keepsake-relay /usr/local/bin/keepsake-relay
+USER keepsake
+VOLUME ["/data"]
+ENV KEEPSAKE_RELAY_BIND=0.0.0.0:8788 \
+    KEEPSAKE_RELAY_DB=/data/relay.db
+EXPOSE 8788
+ENTRYPOINT ["keepsake-relay"]
