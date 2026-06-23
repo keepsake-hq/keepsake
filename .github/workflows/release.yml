@@ -97,6 +97,72 @@ jobs:
           includeUpdaterJson: true
           args: --target aarch64-apple-darwin --bundles app dmg
 
+  # Desktop apps for Windows + Linux, so anyone can download Keepsake — not only macOS. The
+  # macOS job already ran the clippy/test gate (platform-agnostic), so this just builds and
+  # attaches the installers to the same release. includeUpdaterJson is false here so it does
+  # NOT overwrite the macOS latest.json; a single merged cross-platform updater feed is a
+  # follow-up. Requires the same TAURI_SIGNING_* secrets as the macOS job.
+  release-desktop-other:
+    needs: release-macos
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+          - platform: ubuntu-22.04
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Linux desktop system dependencies (webkit2gtk, etc.)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+
+      - name: Cache cargo build (standalone workspace inside the app dir)
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'apps/desktop/src-tauri -> target'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install UI deps + compile Tailwind CSS
+        working-directory: apps/desktop
+        run: |
+          pnpm install --no-frozen-lockfile || true
+          ./node_modules/.bin/tailwindcss -i ./ui/src/input.css -o ./ui/output.css --minify
+
+      - name: Resolve release tag
+        id: rel
+        run: echo "tag=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build & attach Keepsake desktop (Windows / Linux)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/desktop/src-tauri
+          tagName: ${{ steps.rel.outputs.tag }}
+          releaseName: 'Keepsake ${{ steps.rel.outputs.tag }}'
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: false
+
   # Linux server binaries (the hub, CLI and proxy) — so Keepsake can run as a shared
   # memory hub on a VPS, not only the macOS desktop. Attached to the same release.
   release-linux:
