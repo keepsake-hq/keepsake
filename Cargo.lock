@@ -1739,6 +1739,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "keepsake-daemon"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "keepsake-core",
+ "keepsake-crypto",
+ "keepsake-firewall",
+ "keepsake-retrieval",
+ "keepsake-store-sqlite",
+ "keepsake-vault",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "keepsake-desktop-core"
 version = "0.0.0"
 dependencies = [
@@ -1771,11 +1787,14 @@ dependencies = [
  "hex",
  "keepsake-core",
  "keepsake-crypto",
+ "keepsake-daemon",
  "keepsake-firewall",
  "keepsake-retrieval",
  "keepsake-store-sqlite",
  "keepsake-vault",
  "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
