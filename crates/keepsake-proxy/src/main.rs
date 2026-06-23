@@ -1,17 +1,19 @@
-//! `keepsake-proxy` binary — a local OpenAI-compatible gateway that injects your
-//! sovereign memory and forwards to a local LLM (Ollama).
+//! `keepsake-proxy` binary — a local OpenAI-compatible gateway that injects your sovereign
+//! memory and forwards to a local LLM (Ollama).
 //!
-//! Config via env: `KEEPSAKE_DB` (default `keepsake.db`), `KEEPSAKE_TOKEN` (required
-//! bearer), `KEEPSAKE_MNEMONIC` (required BIP-39 seed), `OLLAMA_URL`
-//! (default `http://localhost:11434`). Binds `127.0.0.1:8787`.
+//! Memory source via env: set `KEEPSAKE_SOCKET` (+ optional `KEEPSAKE_CAPABILITY`) to share
+//! one running `keepsake-daemon` vault with every other agent; otherwise a private local vault
+//! from `KEEPSAKE_MNEMONIC` (+ `KEEPSAKE_DB`). Also: `KEEPSAKE_TOKEN` (required bearer),
+//! `OLLAMA_URL` (default `http://localhost:11434`). Binds `127.0.0.1:8787`.
 
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
 use keepsake_crypto::{Kek, RootKeys};
+use keepsake_daemon::DaemonClient;
 use keepsake_firewall::ReceiptLog;
-use keepsake_proxy::{serve, AppState, ProxyAuth};
+use keepsake_proxy::{serve, AppState, MemorySource, ProxyAuth};
 use keepsake_retrieval::FastEmbedder;
 use keepsake_store_sqlite::SqliteVault;
 use keepsake_vault::MemoryVault;
@@ -19,33 +21,47 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
-    let db = std::env::var("KEEPSAKE_DB").unwrap_or_else(|_| "keepsake.db".to_string());
     let token = std::env::var("KEEPSAKE_TOKEN").expect("set KEEPSAKE_TOKEN");
     let mnemonic = std::env::var("KEEPSAKE_MNEMONIC").expect("set KEEPSAKE_MNEMONIC");
     let ollama =
         std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
 
     let roots = RootKeys::from_mnemonic(&mnemonic, "").expect("valid BIP-39 mnemonic");
-    let kek = Kek::from_root(&roots.encryption_root);
     let receipts_path = std::env::var("KEEPSAKE_RECEIPTS")
         .unwrap_or_else(|_| "keepsake-receipts.log".to_string());
     let receipts =
         ReceiptLog::open(&roots.receipt_root, &receipts_path).expect("open receipt log");
 
-    let store = SqliteVault::open(Path::new(&db), &roots.db_key()).expect("open vault");
-    let embedder = match std::env::var("KEEPSAKE_EMBED").as_deref() {
-        Ok("bge") => FastEmbedder::bge_small(),
-        _ => FastEmbedder::nomic(),
-    }
-    .expect("load local embedding model");
-    let mut vault = MemoryVault::new(store, embedder);
-    vault
-        .rebuild_index(&kek)
-        .expect("rebuild index from persisted content");
+    // Memory source: a shared daemon (KEEPSAKE_SOCKET) so the gateway's turns land in the SAME
+    // live vault every other agent uses — or a private local vault otherwise.
+    let memory = if let Ok(socket) = std::env::var("KEEPSAKE_SOCKET") {
+        let mut client = DaemonClient::new(socket);
+        if let Ok(cap) = std::env::var("KEEPSAKE_CAPABILITY") {
+            client = client.with_capability(cap);
+        }
+        println!("keepsake-proxy: sharing the keepsake-daemon vault");
+        MemorySource::Daemon(client)
+    } else {
+        let db = std::env::var("KEEPSAKE_DB").unwrap_or_else(|_| "keepsake.db".to_string());
+        let kek = Kek::from_root(&roots.encryption_root);
+        let store = SqliteVault::open(Path::new(&db), &roots.db_key()).expect("open vault");
+        let embedder = match std::env::var("KEEPSAKE_EMBED").as_deref() {
+            Ok("bge") => FastEmbedder::bge_small(),
+            _ => FastEmbedder::nomic(),
+        }
+        .expect("load local embedding model");
+        let mut vault = MemoryVault::new(store, embedder);
+        vault
+            .rebuild_index(&kek)
+            .expect("rebuild index from persisted content");
+        MemorySource::Local {
+            vault: Box::new(Mutex::new(vault)),
+            kek,
+        }
+    };
 
     let state = Arc::new(AppState {
-        vault: Mutex::new(vault),
-        kek,
+        memory,
         auth: ProxyAuth::new(token),
         ollama_url: ollama,
         http: reqwest::Client::new(),

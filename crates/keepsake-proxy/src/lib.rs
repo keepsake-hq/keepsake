@@ -39,37 +39,30 @@ pub fn last_user_message(req: &ChatRequest) -> Option<&str> {
         .map(|m| m.content.as_str())
 }
 
-/// Return a copy of `req` with up to `k` retrieved memories injected as a leading,
-/// clearly-tagged system message. Passthrough if there is nothing to add.
-pub fn augment_with_memory<E: Embedder>(
-    vault: &MemoryVault<E>,
-    kek: &Kek,
+/// Build a copy of `req` with the retrieved memory `texts` injected as a leading,
+/// clearly-tagged, fenced USER data message (never the privileged system channel, KS-011).
+/// Drops any text the token's `scope_topic` forbids; passthrough if nothing remains.
+pub fn augment_with_hits(
     req: &ChatRequest,
-    k: usize,
+    texts: &[String],
     auth: Option<&Authorization>,
-) -> Result<ChatRequest, StoreError> {
-    let Some(query) = last_user_message(req) else {
-        return Ok(req.clone());
-    };
-    // Drop any hit the token's scope_topic does not permit (owner = no filter).
-    let hits: Vec<_> = vault
-        .recall(kek, query, k)?
-        .into_iter()
-        .filter(|(_, text)| auth.is_none_or(|a| a.permits_topic(text)))
+) -> ChatRequest {
+    let kept: Vec<&String> = texts
+        .iter()
+        .filter(|text| auth.is_none_or(|a| a.permits_topic(text)))
         .collect();
-    if hits.is_empty() {
-        return Ok(req.clone());
+    if kept.is_empty() {
+        return req.clone();
     }
 
-    // Isolate retrieved memory from the privileged instruction channel (KS-011). The memory
-    // goes into a USER-role data message fenced by a random, per-request marker that stored
-    // memory cannot have predicted — so a poisoned memory cannot forge the closing fence and
-    // break out into instructions. Marker-like substrings in the memory text are also stripped.
+    // Isolate retrieved memory from the privileged instruction channel (KS-011): a USER data
+    // message fenced by a random, per-request marker that stored memory cannot have predicted,
+    // so a poisoned memory cannot forge the closing fence. Marker-like substrings are stripped.
     let nonce = injection_nonce();
     let begin = format!("BEGIN_RETRIEVED_MEMORY_{nonce}");
     let end = format!("END_RETRIEVED_MEMORY_{nonce}");
     let mut block = format!("{begin}\n");
-    for (_, text) in &hits {
+    for text in &kept {
         let safe = text
             .replace("BEGIN_RETRIEVED_MEMORY_", "")
             .replace("END_RETRIEVED_MEMORY_", "");
@@ -95,11 +88,31 @@ pub fn augment_with_memory<E: Embedder>(
     messages.push(note);
     messages.push(data);
     messages.extend(req.messages.iter().cloned());
-    Ok(ChatRequest {
+    ChatRequest {
         model: req.model.clone(),
         messages,
         stream: req.stream,
-    })
+    }
+}
+
+/// Recall up to `k` memories for the latest user message and inject them via
+/// [`augment_with_hits`]. Passthrough if there is no user message or nothing to add.
+pub fn augment_with_memory<E: Embedder>(
+    vault: &MemoryVault<E>,
+    kek: &Kek,
+    req: &ChatRequest,
+    k: usize,
+    auth: Option<&Authorization>,
+) -> Result<ChatRequest, StoreError> {
+    let Some(query) = last_user_message(req) else {
+        return Ok(req.clone());
+    };
+    let texts: Vec<String> = vault
+        .recall(kek, query, k)?
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect();
+    Ok(augment_with_hits(req, &texts, auth))
 }
 
 /// Resolve the Privacy Dial from the `X-Keepsake-Privacy` header (defaults to Local-Only).
@@ -299,15 +312,88 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use keepsake_daemon::DaemonClient;
 use keepsake_retrieval::FastEmbedder;
 use tokio::sync::Mutex;
 
-/// Shared server state. The vault lives behind a `Mutex` so handlers can both read
-/// (recall) and write (write-back). For the MVP the embedder is the [`MockEmbedder`];
-/// swapping in `FastEmbedder` is a type change behind the `keepsake-retrieval` feature.
+/// Where the gateway's memory lives: a private vault in this process (`Local`) or a shared
+/// keepsake daemon over its socket (`Daemon`). In daemon mode the gateway's reads and writes
+/// land in the SAME live vault every other agent uses; `cap` (the request's capability token,
+/// hex) is forwarded for the daemon to enforce.
+pub enum MemorySource {
+    Local {
+        vault: Box<Mutex<MemoryVault<FastEmbedder>>>,
+        kek: Kek,
+    },
+    Daemon(DaemonClient),
+}
+
+impl MemorySource {
+    /// Recall up to `k` memory texts for `query` (most relevant first).
+    pub async fn recall(
+        &self,
+        query: &str,
+        k: usize,
+        cap: Option<&str>,
+    ) -> Result<Vec<String>, String> {
+        match self {
+            MemorySource::Local { vault, kek } => {
+                let v = vault.lock().await;
+                Ok(v.recall(kek, query, k)
+                    .map_err(|e| format!("{e:?}"))?
+                    .into_iter()
+                    .map(|(_, text)| text)
+                    .collect())
+            }
+            MemorySource::Daemon(client) => {
+                let resp = with_cap(client, cap)
+                    .recall(query, k)
+                    .await
+                    .map_err(|e| format!("daemon recall: {e}"))?;
+                Ok(resp["result"]["hits"]
+                    .as_array()
+                    .map(|hits| {
+                        hits.iter()
+                            .filter_map(|h| h["text"].as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default())
+            }
+        }
+    }
+
+    /// Store `text` as a new memory.
+    pub async fn remember(&self, text: &str, cap: Option<&str>) -> Result<(), String> {
+        match self {
+            MemorySource::Local { vault, kek } => {
+                let mut v = vault.lock().await;
+                v.remember(kek, text)
+                    .map(|_| ())
+                    .map_err(|e| format!("{e:?}"))
+            }
+            MemorySource::Daemon(client) => {
+                with_cap(client, cap)
+                    .remember(text)
+                    .await
+                    .map_err(|e| format!("daemon remember: {e}"))?;
+                Ok(())
+            }
+        }
+    }
+}
+
+fn with_cap(client: &DaemonClient, cap: Option<&str>) -> DaemonClient {
+    match cap {
+        Some(c) => client.clone().with_capability(c.to_string()),
+        None => client.clone(),
+    }
+}
+
+/// Shared server state: the memory source (local vault or shared daemon), localhost
+/// authorizer, upstream URL, HTTP client, the persistent receipt log, and the capability
+/// root used to verify per-request tokens for the gateway's own policy decisions.
 pub struct AppState {
-    pub vault: Mutex<MemoryVault<FastEmbedder>>,
-    pub kek: Kek,
+    pub memory: MemorySource,
     pub auth: ProxyAuth,
     pub ollama_url: String,
     pub http: reqwest::Client,
@@ -360,10 +446,18 @@ async fn chat_completions(
 
     // Inject retrieved memory only if the dial and the token both permit reading it.
     let mut augmented = if policy.inject {
-        let vault = state.vault.lock().await;
-        match augment_with_memory(&vault, &state.kek, &req, policy.k, auth.as_ref()) {
-            Ok(a) => a,
-            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "vault error\n").into_response(),
+        match last_user_message(&req) {
+            Some(query) => match state
+                .memory
+                .recall(query, policy.k, header("x-keepsake-capability"))
+                .await
+            {
+                Ok(texts) => augment_with_hits(&req, &texts, auth.as_ref()),
+                Err(_) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "vault error\n").into_response()
+                }
+            },
+            None => req.clone(),
         }
     } else {
         req.clone()
@@ -408,8 +502,12 @@ async fn chat_completions(
 
     // Write-back the user's turn only if the dial and the token both permit writing.
     if policy.write_back {
-        let mut vault = state.vault.lock().await;
-        let _ = write_back(&mut vault, &state.kek, &req);
+        if let Some(text) = last_user_message(&req) {
+            let _ = state
+                .memory
+                .remember(text, header("x-keepsake-capability"))
+                .await;
+        }
     }
     {
         let mut receipts = state.receipts.lock().await;
@@ -539,6 +637,42 @@ mod tests {
         write_back(&mut vault, &kek, &user_req("remember this fact")).unwrap();
         let hits = vault.recall(&kek, "remember this fact", 1).unwrap();
         assert_eq!(hits[0].1, "remember this fact");
+    }
+
+    #[tokio::test]
+    async fn daemon_backed_source_writes_and_recalls_from_the_shared_hub() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        {
+            let roots = RootKeys::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+            let kek = Kek::from_root(&roots.encryption_root);
+            let vault =
+                MemoryVault::new(SqliteVault::open_in_memory().unwrap(), MockEmbedder::new(64));
+            let state = std::sync::Arc::new(keepsake_daemon::DaemonState::new(
+                vault,
+                kek,
+                roots.capability_root(),
+            ));
+            let sock2 = sock.clone();
+            tokio::spawn(async move { keepsake_daemon::serve(state, &sock2).await.unwrap() });
+        }
+
+        let source =
+            MemorySource::Daemon(keepsake_daemon::DaemonClient::new(sock.to_str().unwrap()));
+        // Wait for the daemon to accept connections (first write succeeds once it is up).
+        for _ in 0..60 {
+            if source.remember("kilo kilo kilo", None).await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+
+        let texts = source.recall("kilo kilo kilo", 1, None).await.unwrap();
+        assert_eq!(
+            texts,
+            vec!["kilo kilo kilo".to_string()],
+            "the gateway's write lands in — and recalls from — the shared hub"
+        );
     }
 
     #[test]
