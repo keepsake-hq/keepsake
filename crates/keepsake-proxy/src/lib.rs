@@ -484,12 +484,22 @@ fn with_cap(client: &DaemonClient, cap: Option<&str>) -> DaemonClient {
 /// Shared server state: the memory source (local vault or shared daemon), localhost
 /// authorizer, upstream URL, HTTP client, the persistent receipt log, and the capability
 /// root used to verify per-request tokens for the gateway's own policy decisions.
-/// A configured upstream LLM provider: an OpenAI-compatible `base_url` and an optional bearer
-/// `api_key`. Keys come from the operator's environment and are never logged or put in receipts.
+/// Which wire protocol a provider speaks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ProviderKind {
+    /// OpenAI-style `/v1/chat/completions` (OpenAI, Groq, Together, OpenRouter, a local model…).
+    OpenAiCompatible,
+    /// Anthropic's native `/v1/messages` API (different request/response shape + headers).
+    Anthropic,
+}
+
+/// A configured upstream LLM provider: a `base_url`, an optional bearer `api_key`, and which wire
+/// protocol it speaks. Keys come from the operator's environment and are never logged or in receipts.
 #[derive(Clone)]
 pub struct CloudProvider {
     pub base_url: String,
     pub api_key: Option<String>,
+    pub kind: ProviderKind,
 }
 
 pub struct AppState {
@@ -511,14 +521,69 @@ fn resolve_upstream<'a>(
     providers: &'a std::collections::HashMap<String, CloudProvider>,
     default_url: &'a str,
     provider: Option<&str>,
-) -> (&'a str, Option<&'a str>, &'a str) {
+) -> (&'a str, Option<&'a str>, &'a str, ProviderKind) {
     if let Some(name) = provider {
         let key = name.to_lowercase();
         if let Some((label, cp)) = providers.get_key_value(key.as_str()) {
-            return (cp.base_url.as_str(), cp.api_key.as_deref(), label.as_str());
+            return (cp.base_url.as_str(), cp.api_key.as_deref(), label.as_str(), cp.kind);
         }
     }
-    (default_url, None, "local")
+    (default_url, None, "local", ProviderKind::OpenAiCompatible)
+}
+
+/// Translate an OpenAI [`ChatRequest`] into an Anthropic `/v1/messages` body: system messages
+/// become the top-level `system` field, user/assistant turns pass through, and `max_tokens` (which
+/// Anthropic requires) is set.
+pub fn to_anthropic_request(req: &ChatRequest) -> serde_json::Value {
+    let system: String = req
+        .messages
+        .iter()
+        .filter(|m| m.role == "system")
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let messages: Vec<serde_json::Value> = req
+        .messages
+        .iter()
+        .filter(|m| m.role != "system")
+        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+        .collect();
+    let mut body = serde_json::json!({
+        "model": req.model,
+        "max_tokens": 4096,
+        "messages": messages,
+    });
+    if !system.is_empty() {
+        body["system"] = serde_json::json!(system);
+    }
+    body
+}
+
+/// Translate an Anthropic `/v1/messages` response into OpenAI chat-completion shape, so a client
+/// expecting OpenAI finds the text at `choices[0].message.content`. A body that doesn't look like
+/// an Anthropic message (e.g. an error) passes through unchanged.
+pub fn anthropic_to_openai_response(body: &str) -> String {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return body.to_string();
+    };
+    let Some(blocks) = v.get("content").and_then(|c| c.as_array()) else {
+        return body.to_string();
+    };
+    let text: String = blocks
+        .iter()
+        .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+        .collect();
+    serde_json::json!({
+        "id": v.get("id").and_then(|i| i.as_str()).unwrap_or(""),
+        "object": "chat.completion",
+        "model": v.get("model").and_then(|m| m.as_str()).unwrap_or(""),
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": text },
+            "finish_reason": v.get("stop_reason").and_then(|s| s.as_str()).unwrap_or("stop"),
+        }],
+    })
+    .to_string()
 }
 
 /// Run the gateway on `addr` until the process is stopped.
@@ -643,7 +708,7 @@ async fn chat_completions(
 
     // Resolve which upstream serves this request (default local, or a named cloud provider via
     // X-Keepsake-Provider). Owned so the values cross await points cleanly.
-    let (upstream_url, upstream_key, provider_label) =
+    let (upstream_url, upstream_key, provider_label, provider_kind) =
         resolve_upstream(&state.providers, &state.ollama_url, header("x-keepsake-provider"));
     let upstream_url = upstream_url.to_string();
     let upstream_key = upstream_key.map(str::to_string);
@@ -686,15 +751,32 @@ async fn chat_completions(
         Vec::new()
     };
 
-    // Forward to the resolved LLM (local or the selected cloud provider). A cloud provider's
-    // bearer key is attached only here, after the egress policy has already allowed it.
-    let mut request = state
-        .http
-        .post(format!("{upstream_url}/v1/chat/completions"))
-        .json(&augmented);
-    if let Some(key) = &upstream_key {
-        request = request.bearer_auth(key);
-    }
+    // Forward to the resolved LLM (local or the selected cloud provider). The key is attached only
+    // here, after the egress policy has already allowed it; Anthropic uses a different shape + headers.
+    let request = match provider_kind {
+        ProviderKind::Anthropic => {
+            let mut rb = state
+                .http
+                .post(format!("{upstream_url}/v1/messages"))
+                .json(&to_anthropic_request(&augmented));
+            if let Some(key) = &upstream_key {
+                rb = rb
+                    .header("x-api-key", key.as_str())
+                    .header("anthropic-version", "2023-06-01");
+            }
+            rb
+        }
+        ProviderKind::OpenAiCompatible => {
+            let mut rb = state
+                .http
+                .post(format!("{upstream_url}/v1/chat/completions"))
+                .json(&augmented);
+            if let Some(key) = &upstream_key {
+                rb = rb.bearer_auth(key);
+            }
+            rb
+        }
+    };
     let upstream = request.send().await;
     let resp = match upstream {
         Ok(r) => r,
@@ -704,6 +786,9 @@ async fn chat_completions(
     };
     let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
     let mut text = resp.text().await.unwrap_or_default();
+    if matches!(provider_kind, ProviderKind::Anthropic) {
+        text = anthropic_to_openai_response(&text);
+    }
     if !redaction_map.is_empty() {
         text = Redactor::rehydrate(&text, &redaction_map);
     }
@@ -811,26 +896,55 @@ mod tests {
             CloudProvider {
                 base_url: "https://api.openai.com".to_string(),
                 api_key: Some("sk-test".to_string()),
+                kind: ProviderKind::OpenAiCompatible,
             },
         );
         let default = "http://localhost:11434";
 
         // No provider header → the local default, no key.
-        let (u, k, label) = resolve_upstream(&providers, default, None);
+        let (u, k, label, _) = resolve_upstream(&providers, default, None);
         assert_eq!(u, default);
         assert!(k.is_none());
         assert_eq!(label, "local");
 
         // A known provider (case-insensitive) → its url + bearer key.
-        let (u, k, label) = resolve_upstream(&providers, default, Some("OpenAI"));
+        let (u, k, label, _) = resolve_upstream(&providers, default, Some("OpenAI"));
         assert_eq!(u, "https://api.openai.com");
         assert_eq!(k, Some("sk-test"));
         assert_eq!(label, "openai");
 
         // An unknown provider → falls back to the local default (no silent failure).
-        let (u, k, _) = resolve_upstream(&providers, default, Some("nope"));
+        let (u, k, _, _) = resolve_upstream(&providers, default, Some("nope"));
         assert_eq!(u, default);
         assert!(k.is_none());
+    }
+
+    #[test]
+    fn anthropic_request_moves_system_out_and_sets_max_tokens() {
+        let req = ChatRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            messages: vec![
+                ChatMessage { role: "system".to_string(), content: "be terse".to_string() },
+                ChatMessage { role: "user".to_string(), content: "hi".to_string() },
+            ],
+            stream: false,
+        };
+        let body = to_anthropic_request(&req);
+        assert_eq!(body["system"], "be terse");
+        assert_eq!(body["messages"].as_array().unwrap().len(), 1, "system is pulled out of messages");
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert!(body["max_tokens"].as_u64().is_some(), "Anthropic requires max_tokens");
+    }
+
+    #[test]
+    fn anthropic_response_becomes_openai_shape() {
+        let anth = r#"{"id":"msg_1","model":"claude-sonnet-4-6","content":[{"type":"text","text":"hello there"}],"stop_reason":"end_turn"}"#;
+        let openai = anthropic_to_openai_response(anth);
+        let v: serde_json::Value = serde_json::from_str(&openai).unwrap();
+        assert_eq!(v["choices"][0]["message"]["content"], "hello there");
+        assert_eq!(v["object"], "chat.completion");
+        // A non-Anthropic body passes through untouched.
+        assert_eq!(anthropic_to_openai_response("not json"), "not json");
     }
 
     #[test]

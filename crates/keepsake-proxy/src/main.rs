@@ -13,7 +13,7 @@ use std::sync::Arc;
 use keepsake_crypto::{Kek, RootKeys};
 use keepsake_daemon::DaemonClient;
 use keepsake_firewall::ReceiptLog;
-use keepsake_proxy::{serve, AppState, CloudProvider, MemorySource, ProxyAuth};
+use keepsake_proxy::{serve, AppState, CloudProvider, MemorySource, ProviderKind, ProxyAuth};
 use keepsake_retrieval::FastEmbedder;
 use keepsake_store_sqlite::SqliteVault;
 use keepsake_vault::MemoryVault;
@@ -36,7 +36,16 @@ async fn main() {
             .and_then(|r| r.strip_suffix("_URL"))
         {
             let api_key = std::env::var(format!("KEEPSAKE_PROVIDER_{name}_KEY")).ok();
-            providers.insert(name.to_lowercase(), CloudProvider { base_url: v, api_key });
+            // KEEPSAKE_PROVIDER_<NAME>_KIND=anthropic selects the native Messages API; default is
+            // OpenAI-compatible (covers OpenAI, Groq, Together, OpenRouter, local models…).
+            let kind = match std::env::var(format!("KEEPSAKE_PROVIDER_{name}_KIND")).as_deref() {
+                Ok("anthropic") => ProviderKind::Anthropic,
+                _ => ProviderKind::OpenAiCompatible,
+            };
+            providers.insert(
+                name.to_lowercase(),
+                CloudProvider { base_url: v, api_key, kind },
+            );
         }
     }
     if !providers.is_empty() {
