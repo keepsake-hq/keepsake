@@ -37,6 +37,9 @@ Most "AI memory" lives on someone else's servers, tied to one vendor, readable b
 - 🛰️ **Use it with any model.** A local OpenAI-compatible gateway (swap your `base_url`) and an MCP server for Claude / Cursor / Codex.
 - 🔗 **One hub, every agent.** Run the shared hub (`keepsake serve`, or just open the desktop app) and Claude, Cursor, Codex and the proxy all read/write the **same live memory** — each authenticating with a scoped capability token, never the seed. Reachable over the network (token-required) for remote/cloud agents. One-command setup: `keepsake mcp-config`.
 - 🧩 **Automatic, deduped memory.** Turns through the gateway are captured automatically; a write-time similarity guard plus a background consolidation sweep keep the store from filling with duplicates.
+- 🧠 **Quality recall, not just similarity.** Recency-weighted ranking, superseded facts hidden via a bi-temporal ledger, per-memory provenance, and a **knowledge graph** (entities + relations) that surfaces connected memories a pure vector search misses.
+- ☁️ **Cloud models, on your terms.** Route a turn to an OpenAI-compatible cloud provider under the Privacy Dial — PII redacted and a signed receipt written before anything leaves; your API keys stay in your env. Local stays the default.
+- 🔒 **Zero-knowledge backup (core).** Optional OPAQUE-authenticated backup: a self-hosted server validates your password and stores an encrypted blob without ever seeing the password, seed, or plaintext.
 - 🔭 **Post-quantum ready.** Sharing and signatures use ML-DSA-65 and an X25519 + ML-KEM-768 hybrid.
 - 🎛️ **A Privacy Dial, not a hidden switch.** Per-request: local-only · redacted-cloud · full-cloud · no-memory — every cloud disclosure writes a signed, local Memory Receipt.
 
@@ -89,6 +92,8 @@ KEEPSAKE_DB="$HOME/.keepsake/vault.db" \
 
 Point any OpenAI-compatible client at `http://127.0.0.1:8787/v1` with the bearer token. The proxy injects relevant memories, forwards to your local model, and writes the turn back. Per-request posture via the `X-Keepsake-Privacy` header (`local-only` (default) / `redacted-cloud` / `full-cloud` / `no-memory`).
 
+**Cloud models (optional).** Configure providers via env — e.g. `KEEPSAKE_PROVIDER_OPENAI_URL=https://api.openai.com` + `KEEPSAKE_PROVIDER_OPENAI_KEY=…` (keys stay in your env, never logged or written to receipts) — then pick one per request with `X-Keepsake-Provider: openai`. A cloud turn leaves the device only if the Privacy Dial allows it, with PII redacted (in `redacted-cloud`) and a signed receipt written first. Set `KEEPSAKE_AUTO_GRAPH=1` to also distil knowledge-graph triples from each turn (via your **local** model — no cloud egress for building memory).
+
 ## Build it yourself
 
 No trust required. The whole thing builds from source on a Mac with Rust + Node:
@@ -113,11 +118,13 @@ A Rust workspace. The security-critical core is one small, auditable set of crat
 | `keepsake-core` | Two-plane store (append-only content vs. **erasable** key-manifest); bi-temporal Contradiction Ledger. |
 | `keepsake-store-sqlite` | Durable store on **SQLCipher** (full-DB encryption at rest); `forget` = key-row delete + `secure_delete` + WAL truncation. |
 | `keepsake-retrieval` | Local embeddings (**Nomic** via `fastembed`/ONNX) + in-RAM vector index + per-cell encrypted embeddings. |
-| `keepsake-vault` | Integration: semantic remember / recall / forget / share / SAIHM sharing contracts. |
+| `keepsake-vault` | Integration: semantic remember / recall / forget / share / SAIHM contracts; **recency-weighted recall**, **ledger-backed supersession**, per-memory **provenance**, **knowledge-graph** enrichment, portable **Passport** export/import. |
 | `keepsake-firewall` | Context-Firewall: Privacy Dial, PII redaction, HMAC-chained Memory Receipts, **capability tokens**. |
-| `keepsake-proxy` | OpenAI-compatible gateway (axum) → local LLM; RAG injection + write-back; localhost-only security. |
+| `keepsake-proxy` | OpenAI-compatible gateway (axum) → a local model **or a selected cloud provider** under the Privacy Dial; RAG injection + write-back; graph-enriched recall; optional fact/triple auto-extraction; localhost-only security. |
 | `keepsake-mcp` | SAIHM tool router + MCP stdio server (Claude / Cursor) with capability-token enforcement; connects to the hub or opens a local vault. |
 | `keepsake-daemon` | The shared **hub**: one unlocked vault + live index served to every client over a Unix socket (and optional TCP for remote agents) with capability-token auth; write-time dedup + background consolidation. |
+| `keepsake-graph` | Knowledge graph: `(subject, relation, object)` triples distilled from memories, **erasure-aware edges** (forget cascades), graph-enriched recall. |
+| `keepsake-backup` | **OPAQUE** zero-knowledge cloud-backup core: a server validates your password & stores an encrypted backup without ever seeing the password, seed, or plaintext (Ristretto255 + Triple-DH + Argon2). |
 | `keepsake-sync` + `keepsake-relay` | State-based, erasure-safe snapshot sync over a dumb, **file-backed (SQLite)**, zero-knowledge HTTP relay you self-host. |
 | `keepsake-desktop-core` + `apps/desktop` | **Tauri v2** desktop app — testable command core + a local, offline, Tailwind-v4 frontend. |
 

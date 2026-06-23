@@ -13,8 +13,9 @@ rather than hiding it.
 
 ## Status (2026-06)
 
-Shipped (TDD, 64 tests, `clippy`/`rustfmt` clean) — the full local path works end-to-end,
-now with a desktop shell:
+Shipped (TDD, **127 tests**, `clippy`/`rustfmt` clean) — the full local path works end-to-end,
+now with a desktop shell, a shared hub, quality recall, cloud routing, a knowledge graph,
+portable backups, and a zero-knowledge cloud-backup core:
 
 - **`keepsake-crypto`** — BIP-39 → HKDF roots; random-DEK AES-256-GCM envelope (erasure
   proven by test); X25519 sealed-box sharing.
@@ -22,9 +23,13 @@ now with a desktop shell:
 - **`keepsake-store-sqlite`** — durable store; §4a invariant #2 proven (wrapped DEK
   physically gone from db + WAL after `forget`).
 - **`keepsake-retrieval`** — local embeddings + in-RAM index; real BGE/Nomic behind `fastembed`.
-- **`keepsake-vault`** — semantic remember/recall/forget/share/rebuild.
+- **`keepsake-vault`** — semantic remember/recall/forget/share/rebuild; **recency-weighted recall**,
+  **ledger-backed supersession** (superseded facts hidden), per-memory **provenance**,
+  **knowledge-graph** integration, and portable **Passport** export/import.
 - **`keepsake-firewall`** — Privacy Dial, PII redaction, HMAC-chained Memory Receipts.
-- **`keepsake-proxy`** — OpenAI-compatible gateway → Ollama (e2e verified) + localhost P0.
+- **`keepsake-proxy`** — OpenAI-compatible gateway → a local model **or a selected cloud provider**
+  (under the Privacy Dial: redaction + signed receipt before egress); graph-enriched recall;
+  optional auto-extraction of facts & graph triples; localhost P0.
 - **`keepsake-mcp`** — SAIHM tool router (8 `saihm_*` tools).
 - **`keepsake-cli`** — `keepsake` terminal app.
 - **`keepsake-sync` + `keepsake-relay`** — encrypted snapshot sync over a dumb HTTP relay.
@@ -34,6 +39,12 @@ now with a desktop shell:
   clients (MCP/proxy/desktop) over a Unix socket + optional TCP (token-required for the network);
   **write-time dedup + background consolidation** (anti-bloat); one-command onboarding
   (`keepsake serve|token|mcp-config`); Linux binaries + Dockerfile for VPS hosting.
+- **`keepsake-graph`** — knowledge-graph layer: `(subject, relation, object)` triples distilled
+  from memories, **erasure-aware edges** (forget cascades), and **graph-enriched recall** that
+  surfaces connected memories a pure vector search misses.
+- **`keepsake-backup`** — **OPAQUE** (aPAKE) zero-knowledge cloud-backup core: the server validates
+  a password and stores an encrypted backup **without ever seeing the password, seed, or plaintext**
+  (Ristretto255 + Triple-DH + Argon2); a server-blind export key locks the Passport blob.
 
 ---
 
@@ -93,13 +104,30 @@ without blowing the token budget or poisoning context.
 
 ---
 
-## v2 — Ecosystem + Mobile + Hardening
+## v2 — Quality, Reach & Hardening  *(shipped this round)*
 
-- [ ] iOS/Android SDKs (uniffi); mobile companion.
-- [ ] Entity/relation graph layer.
-- [ ] **Memory Passport** export/import + interop demo with other SAIHM implementations.
-- [ ] Optional chain-audit adapter (off by default; the core stays token-/chain-free).
-- [ ] External security audit of `keepsake-crypto` / `keepsake-firewall`; fuzzing; reproducible builds.
+- [x] **Quality recall** — recency-weighted ranking, bi-temporal **Contradiction Ledger** wired
+      into recall (superseded facts hidden), per-memory **provenance**.
+- [x] **Cloud-model routing** — forward to a selected OpenAI-compatible cloud provider under the
+      Privacy Dial (PII redaction + signed receipt before egress); keys stay in the operator's env.
+      *Native Anthropic Messages adapter: follow-up.*
+- [x] **Entity/relation knowledge graph** (`keepsake-graph`) — triples, erasure-aware edges,
+      graph-enriched recall; exposed over the hub.
+- [x] **Memory Passport** — portable, encrypted vault export/import (`keepsake export|import`).
+      *Interop demo with another SAIHM implementation: follow-up.*
+- [x] **OPAQUE zero-knowledge cloud-backup core** (`keepsake-backup`). *HTTP endpoint over the
+      dumb relay: mechanical follow-up.*
+
+Deferred / not built (deliberate or external):
+
+- [ ] iOS/Android SDKs (uniffi) + mobile companion → **v3** (app-store accounts tie to a legal
+      identity, which conflicts with anonymous distribution — a CEO decision).
+- [ ] External security audit of `keepsake-crypto` / `keepsake-firewall` / `keepsake-backup`;
+      `cargo-fuzz` targets; reproducible builds. *(Audit needs budget + a firm.)*
+- [ ] Optional chain-audit adapter — deliberately deferred; the core stays token-/chain-free.
+- [ ] Considered & **rejected: ORE / OPE** (order-revealing / -preserving encryption) — they leak
+      ordering/distribution and solve a problem a local-first, *semantic* store does not have. The
+      "compute on ciphertext" goal stays **FHE** (north-star).
 
 ---
 
@@ -108,7 +136,13 @@ without blowing the token budget or poisoning context.
 Forward-looking primitives. Not committed scope — tracked here so we adopt them the
 moment they're practical. Both are honestly **not** drop-in today; notes below.
 
-### 1. OPRF — Oblivious Pseudorandom Functions 🕶️ *(target: v2)*
+### 1. OPRF / OPAQUE — Oblivious PRF & aPAKE 🕶️ *(core shipped — `keepsake-backup`)*
+
+> **Status (this round):** the OPAQUE handshake + export-key locker are implemented and tested in
+> `keepsake-backup` (Ristretto255 + Triple-DH + Argon2): register→login yields the same server-blind
+> export key, a wrong password fails, and that key locks the backup blob. Remaining: the relay HTTP
+> endpoint (upload/download the locked blob, gated by OPAQUE login) and an external crypto review.
+
 
 **Goal.** An *optional, encrypted cloud backup* where a server can validate a
 password / authorize access to a manifest **without ever seeing the password, the
