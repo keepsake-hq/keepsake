@@ -2650,6 +2650,7 @@ dependencies = [
  "aes-gcm",
  "bip39",
  "hkdf",
+ "hmac",
  "ml-dsa",
  "ml-kem",
  "rand 0.8.6",
@@ -2660,11 +2661,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "keepsake-daemon"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "keepsake-core",
+ "keepsake-crypto",
+ "keepsake-firewall",
+ "keepsake-retrieval",
+ "keepsake-store-sqlite",
+ "keepsake-vault",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "keepsake-desktop"
 version = "0.0.0"
 dependencies = [
  "hex",
+ "keepsake-core",
  "keepsake-crypto",
+ "keepsake-daemon",
  "keepsake-desktop-core",
  "keepsake-retrieval",
  "keepsake-store-sqlite",
@@ -2688,6 +2706,18 @@ dependencies = [
  "keepsake-store-sqlite",
  "keepsake-vault",
  "serde",
+]
+
+[[package]]
+name = "keepsake-firewall"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "hmac",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -5569,7 +5599,19 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "385a6cb71ab9ab790c5fe8d67f1645e6c450a7ce006a33de03daa956cf70a496"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]

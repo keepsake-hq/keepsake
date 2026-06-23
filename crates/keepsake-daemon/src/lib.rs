@@ -20,7 +20,7 @@ use tokio::net::{UnixListener, UnixStream};
 /// One unlocked vault (+ its live index) behind a mutex, the key-encryption-key, and the
 /// capability root used to verify client tokens. Shared by every connected client.
 pub struct DaemonState<E: Embedder> {
-    vault: Mutex<MemoryVault<E>>,
+    vault: Arc<Mutex<MemoryVault<E>>>,
     kek: Kek,
     cap_root: [u8; 32],
 }
@@ -28,11 +28,23 @@ pub struct DaemonState<E: Embedder> {
 impl<E: Embedder> DaemonState<E> {
     /// Wrap an already-unlocked vault. `cap_root` verifies clients' capability tokens.
     pub fn new(vault: MemoryVault<E>, kek: Kek, cap_root: [u8; 32]) -> Self {
+        Self::from_shared(Arc::new(Mutex::new(vault)), kek, cap_root)
+    }
+
+    /// Share an already-wrapped vault — e.g. a desktop GUI that locks the SAME `Mutex` for its
+    /// own reads/writes, so the GUI and every socket client see one live index.
+    pub fn from_shared(vault: Arc<Mutex<MemoryVault<E>>>, kek: Kek, cap_root: [u8; 32]) -> Self {
         Self {
-            vault: Mutex::new(vault),
+            vault,
             kek,
             cap_root,
         }
+    }
+
+    /// A handle to the shared vault, for an in-process owner (the desktop GUI) to read and write
+    /// the same live index the socket clients use.
+    pub fn vault(&self) -> Arc<Mutex<MemoryVault<E>>> {
+        Arc::clone(&self.vault)
     }
 
     /// Handle one JSON-RPC request and return the JSON-RPC response. Synchronous: vault
@@ -372,6 +384,33 @@ mod tests {
         // A garbage / tampered token is rejected outright.
         let r = state.handle(&recall_req("delta", 1, Some("deadbeef")));
         assert!(r["error"].is_object(), "garbage token rejected: {r}");
+    }
+
+    #[test]
+    fn from_shared_lets_the_in_process_owner_see_daemon_writes() {
+        let roots = RootKeys::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(MemoryVault::new(
+            SqliteVault::open_in_memory().unwrap(),
+            MockEmbedder::new(64),
+        )));
+        let state = DaemonState::from_shared(
+            std::sync::Arc::clone(&shared),
+            Kek::from_root(&roots.encryption_root),
+            roots.capability_root(),
+        );
+
+        // A write through the daemon's request handler…
+        let r = state.handle(&remember_req("mike mike mike", None));
+        assert!(r["result"]["cell_id"].is_string(), "daemon remembers: {r}");
+
+        // …is visible to the in-process owner locking the SAME vault directly (the desktop GUI).
+        let kek = Kek::from_root(&roots.encryption_root);
+        let hits = shared
+            .lock()
+            .unwrap()
+            .recall(&kek, "mike mike mike", 1)
+            .unwrap();
+        assert_eq!(hits[0].1, "mike mike mike");
     }
 
     use std::sync::Arc;

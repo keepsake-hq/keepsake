@@ -1,20 +1,36 @@
-//! Keepsake desktop — the thin Tauri shell that exposes the vault to the frontend.
+//! Keepsake desktop — the thin Tauri shell.
 //!
-//! All real logic lives in `keepsake-desktop-core` (testable, tauri-free). Here we only
-//! hold the unlocked-vault session state and wire the `#[tauri::command]`s to it.
+//! On unlock it opens the vault AND **hosts the shared memory hub**: a `keepsake-daemon`
+//! serving the very same live vault over `~/.keepsake/daemon.sock`, so Claude / Cursor / Codex
+//! and the proxy all read and write one shared memory. The GUI commands lock that same vault,
+//! and `lock` stops the hub (re-locking the vault).
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use keepsake_core::CellId;
 use keepsake_crypto::{Kek, RootKeys};
-use keepsake_desktop_core::{MemoryHit, RecentMemory, VaultStatus, Vaulted};
+use keepsake_daemon::DaemonState;
+use keepsake_desktop_core::{MemoryHit, RecentMemory, VaultStatus};
 use keepsake_retrieval::FastEmbedder;
 use keepsake_store_sqlite::SqliteVault;
 use keepsake_vault::MemoryVault;
 use tauri::path::BaseDirectory;
 use tauri::{Manager, State};
 
+const PROFILE: &str = "SAIHM Cell-/Tool-compatible, local receipt profile";
+
+type SharedVault = Arc<Mutex<MemoryVault<FastEmbedder>>>;
+
+/// The unlocked session: the shared vault (also served to agents by the hosted daemon), its
+/// KEK, and the running daemon task (aborted on lock so the vault stops being served).
+struct Session {
+    vault: SharedVault,
+    kek: Kek,
+    daemon: tauri::async_runtime::JoinHandle<()>,
+}
+
 /// Session state: `None` while locked, `Some` once a seed has been entered.
-struct AppState(Mutex<Option<Vaulted<FastEmbedder>>>);
+struct AppState(Mutex<Option<Session>>);
 
 /// The on-disk home for the vault + model cache (`~/.keepsake`).
 fn keepsake_dir() -> std::path::PathBuf {
@@ -28,8 +44,13 @@ fn vault_db_path() -> std::path::PathBuf {
     keepsake_dir().join("vault.db")
 }
 
-/// Find Nomic model files already present on disk (no network): a flat directory we
-/// control, or the Hugging Face snapshot inside the download cache.
+/// Where the hosted hub listens; agents point `KEEPSAKE_SOCKET` here.
+fn socket_path() -> std::path::PathBuf {
+    keepsake_dir().join("daemon.sock")
+}
+
+/// Find Nomic model files already present on disk (no network): a flat directory we control,
+/// or the Hugging Face snapshot inside the download cache.
 fn local_model_dir() -> Option<std::path::PathBuf> {
     let models = keepsake_dir().join("models");
     let flat = models.join("nomic-embed-text-v1.5");
@@ -51,9 +72,8 @@ fn local_model_dir() -> Option<std::path::PathBuf> {
 }
 
 /// Resolve the local embedding model, preferring fully-offline paths:
-/// 1. a model **bundled inside the app** (offline on a fresh install, any machine),
-/// 2. model files **already on disk** (loaded directly — no hf-hub network check),
-/// 3. otherwise download once into the cache (the only path that needs internet).
+/// 1. a model **bundled inside the app**, 2. model files **already on disk**, 3. otherwise
+/// download once into the cache (the only path that needs internet).
 fn load_embedder(app: &tauri::AppHandle) -> Result<FastEmbedder, String> {
     if let Ok(dir) = app
         .path()
@@ -69,6 +89,24 @@ fn load_embedder(app: &tauri::AppHandle) -> Result<FastEmbedder, String> {
     }
     FastEmbedder::nomic_cached(keepsake_dir().join("models"))
         .map_err(|e| format!("load embedding model: {e}"))
+}
+
+/// Run `f` against the unlocked vault (locking the shared vault); errors if locked.
+fn with_vault<T>(
+    state: &State<AppState>,
+    f: impl FnOnce(&mut MemoryVault<FastEmbedder>, &Kek) -> Result<T, String>,
+) -> Result<T, String> {
+    let guard = state.0.lock().unwrap();
+    let session = guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
+    let mut vault = session.vault.lock().map_err(|_| "vault poisoned".to_string())?;
+    f(&mut vault, &session.kek)
+}
+
+fn vault_status(vault: &MemoryVault<FastEmbedder>) -> Result<VaultStatus, String> {
+    Ok(VaultStatus {
+        memories: vault.count().map_err(|e| format!("{e:?}"))?,
+        profile: PROFILE.to_string(),
+    })
 }
 
 #[tauri::command]
@@ -88,8 +126,7 @@ fn generate_seed() -> String {
     keepsake_crypto::generate_mnemonic()
 }
 
-/// Whether the embedding model is already present locally (so unlock won't need to
-/// download it). Lets the UI show "Downloading…" only on a true first run.
+/// Whether the embedding model is already present locally (so unlock won't need to download it).
 #[tauri::command]
 fn model_ready(app: tauri::AppHandle) -> bool {
     if let Ok(dir) = app
@@ -118,60 +155,102 @@ fn unlock(
     let mut vault = MemoryVault::new(store, embedder);
     vault.rebuild_index(&kek).map_err(|e| format!("{e:?}"))?;
 
-    let vaulted = Vaulted::new(vault, kek);
-    let status = vaulted.status()?;
-    *state.0.lock().unwrap() = Some(vaulted);
+    let shared: SharedVault = Arc::new(Mutex::new(vault));
+
+    // Host the shared hub on the same live vault, so every agent shares this memory.
+    let socket = socket_path();
+    let _ = std::fs::remove_file(&socket);
+    let daemon_state = Arc::new(DaemonState::from_shared(
+        Arc::clone(&shared),
+        Kek::from_root(&roots.encryption_root),
+        roots.capability_root(),
+    ));
+    let serve_socket = socket.clone();
+    let daemon = tauri::async_runtime::spawn(async move {
+        if let Err(e) = keepsake_daemon::serve(daemon_state, &serve_socket).await {
+            log::error!("keepsake-daemon stopped: {e}");
+        }
+    });
+
+    let status = {
+        let v = shared.lock().map_err(|_| "vault poisoned".to_string())?;
+        vault_status(&v)?
+    };
+    *state.0.lock().unwrap() = Some(Session {
+        vault: shared,
+        kek,
+        daemon,
+    });
     Ok(status)
 }
 
 #[tauri::command]
 fn lock(state: State<AppState>) {
-    *state.0.lock().unwrap() = None;
+    if let Some(session) = state.0.lock().unwrap().take() {
+        // Stop serving the now-relocked vault; dropping the session drops the vault.
+        session.daemon.abort();
+    }
+    let _ = std::fs::remove_file(socket_path());
 }
 
 #[tauri::command]
 fn remember(state: State<AppState>, text: String) -> Result<String, String> {
-    let mut guard = state.0.lock().unwrap();
-    guard
-        .as_mut()
-        .ok_or_else(|| "vault locked".to_string())?
-        .remember(&text)
+    with_vault(&state, |vault, kek| {
+        vault
+            .remember(kek, &text)
+            .map(|id| hex::encode(id.as_bytes()))
+            .map_err(|e| format!("{e:?}"))
+    })
 }
 
 #[tauri::command]
 fn recall(state: State<AppState>, query: String, k: usize) -> Result<Vec<MemoryHit>, String> {
-    let guard = state.0.lock().unwrap();
-    guard
-        .as_ref()
-        .ok_or_else(|| "vault locked".to_string())?
-        .recall(&query, k)
+    with_vault(&state, |vault, kek| {
+        Ok(vault
+            .recall(kek, &query, k)
+            .map_err(|e| format!("{e:?}"))?
+            .into_iter()
+            .map(|(id, text)| MemoryHit {
+                id: hex::encode(id.as_bytes()),
+                text,
+            })
+            .collect())
+    })
 }
 
 #[tauri::command]
 fn recent(state: State<AppState>, limit: usize) -> Result<Vec<RecentMemory>, String> {
-    let guard = state.0.lock().unwrap();
-    guard
-        .as_ref()
-        .ok_or_else(|| "vault locked".to_string())?
-        .recent(limit)
+    with_vault(&state, |vault, kek| {
+        Ok(vault
+            .recent(kek, limit)
+            .map_err(|e| format!("{e:?}"))?
+            .into_iter()
+            .map(|(id, text, created_at)| RecentMemory {
+                id: hex::encode(id.as_bytes()),
+                text,
+                created_at,
+            })
+            .collect())
+    })
 }
 
 #[tauri::command]
 fn forget(state: State<AppState>, id: String) -> Result<(), String> {
-    let mut guard = state.0.lock().unwrap();
-    guard
-        .as_mut()
-        .ok_or_else(|| "vault locked".to_string())?
-        .forget(&id)
+    with_vault(&state, |vault, _kek| {
+        let bytes = hex::decode(&id).map_err(|_| "invalid cell id (not hex)".to_string())?;
+        let arr: [u8; 32] = bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| "cell id must be 32 bytes".to_string())?;
+        vault
+            .forget(&CellId::from_bytes(arr))
+            .map_err(|e| format!("{e:?}"))
+    })
 }
 
 #[tauri::command]
 fn status(state: State<AppState>) -> Result<VaultStatus, String> {
-    let guard = state.0.lock().unwrap();
-    guard
-        .as_ref()
-        .ok_or_else(|| "vault locked".to_string())?
-        .status()
+    with_vault(&state, |vault, _kek| vault_status(vault))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
