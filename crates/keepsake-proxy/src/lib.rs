@@ -429,13 +429,41 @@ fn with_cap(client: &DaemonClient, cap: Option<&str>) -> DaemonClient {
 /// Shared server state: the memory source (local vault or shared daemon), localhost
 /// authorizer, upstream URL, HTTP client, the persistent receipt log, and the capability
 /// root used to verify per-request tokens for the gateway's own policy decisions.
+/// A configured upstream LLM provider: an OpenAI-compatible `base_url` and an optional bearer
+/// `api_key`. Keys come from the operator's environment and are never logged or put in receipts.
+#[derive(Clone)]
+pub struct CloudProvider {
+    pub base_url: String,
+    pub api_key: Option<String>,
+}
+
 pub struct AppState {
     pub memory: MemorySource,
     pub auth: ProxyAuth,
+    /// Default/local upstream used when no provider is selected (e.g. Ollama).
     pub ollama_url: String,
+    /// Named cloud providers, selectable per request via the `X-Keepsake-Provider` header.
+    pub providers: std::collections::HashMap<String, CloudProvider>,
     pub http: reqwest::Client,
     pub receipts: Mutex<ReceiptLog>,
     pub cap_root: [u8; 32],
+}
+
+/// Resolve the upstream LLM for a request: a named cloud provider (case-insensitive) from the
+/// `X-Keepsake-Provider` header, or the default local model. Returns `(base_url, api_key, label)`.
+/// An unknown provider name falls back to the local default rather than failing silently.
+fn resolve_upstream<'a>(
+    providers: &'a std::collections::HashMap<String, CloudProvider>,
+    default_url: &'a str,
+    provider: Option<&str>,
+) -> (&'a str, Option<&'a str>, &'a str) {
+    if let Some(name) = provider {
+        let key = name.to_lowercase();
+        if let Some((label, cp)) = providers.get_key_value(key.as_str()) {
+            return (cp.base_url.as_str(), cp.api_key.as_deref(), label.as_str());
+        }
+    }
+    (default_url, None, "local")
 }
 
 /// Run the gateway on `addr` until the process is stopped.
@@ -520,6 +548,14 @@ async fn chat_completions(
     };
     let policy = memory_policy(dial, auth.as_ref());
 
+    // Resolve which upstream serves this request (default local, or a named cloud provider via
+    // X-Keepsake-Provider). Owned so the values cross await points cleanly.
+    let (upstream_url, upstream_key, provider_label) =
+        resolve_upstream(&state.providers, &state.ollama_url, header("x-keepsake-provider"));
+    let upstream_url = upstream_url.to_string();
+    let upstream_key = upstream_key.map(str::to_string);
+    let provider_label = provider_label.to_string();
+
     // Inject retrieved memory only if the dial and the token both permit reading it.
     let mut augmented = if policy.inject {
         match last_user_message(&req) {
@@ -542,7 +578,7 @@ async fn chat_completions(
 
     // Enforce the egress policy BEFORE anything leaves the device: a cloud upstream is only
     // reached if the dial and the token both permit it, and redacted-cloud strips PII first.
-    let redact = match egress_decision(&state.ollama_url, dial, auth.as_ref()) {
+    let redact = match egress_decision(&upstream_url, dial, auth.as_ref()) {
         Ok(r) => r,
         Err(reason) => {
             let mut receipts = state.receipts.lock().await;
@@ -550,20 +586,23 @@ async fn chat_completions(
             return (StatusCode::FORBIDDEN, format!("{reason}\n")).into_response();
         }
     };
-    let upstream_local = is_local_url(&state.ollama_url);
+    let upstream_local = is_local_url(&upstream_url);
     let redaction_map = if redact {
         redact_request(&mut augmented)
     } else {
         Vec::new()
     };
 
-    // Forward to the configured LLM.
-    let upstream = state
+    // Forward to the resolved LLM (local or the selected cloud provider). A cloud provider's
+    // bearer key is attached only here, after the egress policy has already allowed it.
+    let mut request = state
         .http
-        .post(format!("{}/v1/chat/completions", state.ollama_url))
-        .json(&augmented)
-        .send()
-        .await;
+        .post(format!("{upstream_url}/v1/chat/completions"))
+        .json(&augmented);
+    if let Some(key) = &upstream_key {
+        request = request.bearer_auth(key);
+    }
+    let upstream = request.send().await;
     let resp = match upstream {
         Ok(r) => r,
         Err(e) => {
@@ -597,7 +636,7 @@ async fn chat_completions(
         receipts.append(
             "chat",
             &format!(
-                "dial={dial:?} model={} upstream={} egress={} redacted={} memory={}",
+                "dial={dial:?} model={} provider={provider_label} upstream={} egress={} redacted={} memory={}",
                 req.model,
                 if upstream_local { "local" } else { "cloud" },
                 !upstream_local,
@@ -658,6 +697,36 @@ mod tests {
             content: "second".to_string(),
         });
         assert_eq!(last_user_message(&req), Some("second"));
+    }
+
+    #[test]
+    fn resolve_upstream_routes_by_provider_header() {
+        let mut providers = std::collections::HashMap::new();
+        providers.insert(
+            "openai".to_string(),
+            CloudProvider {
+                base_url: "https://api.openai.com".to_string(),
+                api_key: Some("sk-test".to_string()),
+            },
+        );
+        let default = "http://localhost:11434";
+
+        // No provider header → the local default, no key.
+        let (u, k, label) = resolve_upstream(&providers, default, None);
+        assert_eq!(u, default);
+        assert!(k.is_none());
+        assert_eq!(label, "local");
+
+        // A known provider (case-insensitive) → its url + bearer key.
+        let (u, k, label) = resolve_upstream(&providers, default, Some("OpenAI"));
+        assert_eq!(u, "https://api.openai.com");
+        assert_eq!(k, Some("sk-test"));
+        assert_eq!(label, "openai");
+
+        // An unknown provider → falls back to the local default (no silent failure).
+        let (u, k, _) = resolve_upstream(&providers, default, Some("nope"));
+        assert_eq!(u, default);
+        assert!(k.is_none());
     }
 
     #[test]

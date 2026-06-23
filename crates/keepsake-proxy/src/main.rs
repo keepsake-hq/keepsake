@@ -13,7 +13,7 @@ use std::sync::Arc;
 use keepsake_crypto::{Kek, RootKeys};
 use keepsake_daemon::DaemonClient;
 use keepsake_firewall::ReceiptLog;
-use keepsake_proxy::{serve, AppState, MemorySource, ProxyAuth};
+use keepsake_proxy::{serve, AppState, CloudProvider, MemorySource, ProxyAuth};
 use keepsake_retrieval::FastEmbedder;
 use keepsake_store_sqlite::SqliteVault;
 use keepsake_vault::MemoryVault;
@@ -25,6 +25,25 @@ async fn main() {
     let mnemonic = std::env::var("KEEPSAKE_MNEMONIC").expect("set KEEPSAKE_MNEMONIC");
     let ollama =
         std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
+
+    // Cloud providers from the operator's env: KEEPSAKE_PROVIDER_<NAME>_URL (+ optional _KEY).
+    // Keys stay in the environment — never logged, never written to receipts. Select one per
+    // request with the `X-Keepsake-Provider: <name>` header; omit it to use the local model.
+    let mut providers = std::collections::HashMap::new();
+    for (k, v) in std::env::vars() {
+        if let Some(name) = k
+            .strip_prefix("KEEPSAKE_PROVIDER_")
+            .and_then(|r| r.strip_suffix("_URL"))
+        {
+            let api_key = std::env::var(format!("KEEPSAKE_PROVIDER_{name}_KEY")).ok();
+            providers.insert(name.to_lowercase(), CloudProvider { base_url: v, api_key });
+        }
+    }
+    if !providers.is_empty() {
+        let mut names: Vec<&str> = providers.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        println!("keepsake-proxy: cloud providers configured: {}", names.join(", "));
+    }
 
     let roots = RootKeys::from_mnemonic(&mnemonic, "").expect("valid BIP-39 mnemonic");
     let receipts_path = std::env::var("KEEPSAKE_RECEIPTS")
@@ -64,6 +83,7 @@ async fn main() {
         memory,
         auth: ProxyAuth::new(token),
         ollama_url: ollama,
+        providers,
         http: reqwest::Client::new(),
         receipts: Mutex::new(receipts),
         cap_root: roots.capability_root(),
