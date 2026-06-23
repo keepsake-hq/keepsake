@@ -5,7 +5,7 @@
 //! [`DaemonState::handle`] is the transport-agnostic JSON-RPC core (synchronous, easy to
 //! test); a Unix-socket server wraps it so many clients share one vault and one live index.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use keepsake_core::CellId;
@@ -224,6 +224,61 @@ where
     Ok(())
 }
 
+/// A thin client to a running daemon over its Unix socket. MCP, proxy and desktop use this
+/// to read and write the shared vault with a scoped capability token — never the raw seed.
+/// Each call is one request/response on a fresh connection (cheap over a local socket).
+pub struct DaemonClient {
+    socket_path: PathBuf,
+    capability: Option<String>,
+}
+
+impl DaemonClient {
+    /// Connect (per call) to the daemon at `socket_path`, as the local owner.
+    pub fn new(socket_path: impl Into<PathBuf>) -> Self {
+        Self {
+            socket_path: socket_path.into(),
+            capability: None,
+        }
+    }
+
+    /// Authenticate every call with this capability token (hex) instead of owner access.
+    pub fn with_capability(mut self, token_hex: impl Into<String>) -> Self {
+        self.capability = Some(token_hex.into());
+        self
+    }
+
+    pub async fn remember(&self, text: &str) -> std::io::Result<Value> {
+        self.call("vault/remember", json!({ "text": text })).await
+    }
+
+    pub async fn recall(&self, query: &str, k: usize) -> std::io::Result<Value> {
+        self.call("vault/recall", json!({ "query": query, "k": k })).await
+    }
+
+    pub async fn forget(&self, cell_id_hex: &str) -> std::io::Result<Value> {
+        self.call("vault/forget", json!({ "cell_id": cell_id_hex })).await
+    }
+
+    pub async fn status(&self) -> std::io::Result<Value> {
+        self.call("vault/status", json!({})).await
+    }
+
+    async fn call(&self, method: &str, mut params: Value) -> std::io::Result<Value> {
+        if let Some(cap) = &self.capability {
+            params["capability"] = json!(cap);
+        }
+        let req = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
+        let stream = UnixStream::connect(&self.socket_path).await?;
+        let (read_half, mut write_half) = stream.into_split();
+        let mut bytes = serde_json::to_vec(&req).unwrap_or_default();
+        bytes.push(b'\n');
+        write_half.write_all(&bytes).await?;
+        let mut lines = tokio::io::BufReader::new(read_half).lines();
+        let line = lines.next_line().await?.unwrap_or_default();
+        Ok(serde_json::from_str(&line).unwrap_or(Value::Null))
+    }
+}
+
 fn rpc_ok(id: Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
@@ -373,5 +428,55 @@ mod tests {
             Some(1),
             "client B sees A's memory live over a separate connection: {r}"
         );
+    }
+
+    #[tokio::test]
+    async fn daemon_client_roundtrips_and_respects_token_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        let (state, cap_root) = test_state();
+        {
+            let state = Arc::new(state);
+            let sock = sock.clone();
+            tokio::spawn(async move { serve(state, &sock).await.unwrap() });
+        }
+
+        // Wait until the daemon is accepting connections (owner status succeeds).
+        let owner = DaemonClient::new(&sock);
+        for _ in 0..40 {
+            if owner
+                .status()
+                .await
+                .map(|r| r["result"].is_object())
+                .unwrap_or(false)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        // The owner client writes and reads through the connector.
+        let r = owner.remember("hotel hotel hotel").await.unwrap();
+        assert!(r["result"]["cell_id"].is_string(), "owner remembers: {r}");
+        let r = owner.recall("hotel hotel hotel", 1).await.unwrap();
+        assert_eq!(
+            r["result"]["hits"].as_array().map(Vec::len),
+            Some(1),
+            "owner recalls: {r}"
+        );
+
+        // A read-only-token client may recall the same vault but must not write to it.
+        let read_tok =
+            CapabilityToken::issue(&cap_root, vec![Caveat::new("capability", "memory:read")])
+                .encode_hex();
+        let reader = DaemonClient::new(&sock).with_capability(read_tok);
+        let r = reader.recall("hotel hotel hotel", 1).await.unwrap();
+        assert_eq!(
+            r["result"]["hits"].as_array().map(Vec::len),
+            Some(1),
+            "read token recalls the shared vault: {r}"
+        );
+        let r = reader.remember("nope").await.unwrap();
+        assert!(r["error"].is_object(), "read token must not write: {r}");
     }
 }
