@@ -369,6 +369,10 @@ async fn serve_daemon() {
     if let Some(parent) = sock.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    keepsake_daemon::spawn_consolidation(
+        std::sync::Arc::clone(&state),
+        std::time::Duration::from_secs(300),
+    );
     eprintln!("keepsake hub listening on {}", sock.display());
     keepsake_daemon::serve(state, &sock)
         .await

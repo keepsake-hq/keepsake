@@ -39,6 +39,23 @@ pub fn last_user_message(req: &ChatRequest) -> Option<&str> {
         .map(|m| m.content.as_str())
 }
 
+/// Parse a model's fact-extraction reply into individual durable facts: one per non-empty line,
+/// bullet/numbering stripped; an explicit `NONE` yields no facts (so non-facts aren't stored).
+pub fn parse_facts(reply: &str) -> Vec<String> {
+    reply
+        .lines()
+        .map(|l| l.trim().trim_start_matches(['-', '*', '•']).trim())
+        .map(|l| {
+            l.split_once(['.', ')'])
+                .filter(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+                .map(|(_, rest)| rest.trim())
+                .unwrap_or(l)
+        })
+        .filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("none"))
+        .map(str::to_string)
+        .collect()
+}
+
 /// Build a copy of `req` with the retrieved memory `texts` injected as a leading,
 /// clearly-tagged, fenced USER data message (never the privileged system channel, KS-011).
 /// Drops any text the token's `scope_topic` forbids; passthrough if nothing remains.
@@ -367,7 +384,7 @@ impl MemorySource {
         match self {
             MemorySource::Local { vault, kek } => {
                 let mut v = vault.lock().await;
-                v.remember(kek, text)
+                v.remember_deduped(kek, text, keepsake_vault::DEDUP_THRESHOLD)
                     .map(|_| ())
                     .map_err(|e| format!("{e:?}"))
             }
@@ -414,6 +431,45 @@ pub async fn serve(addr: SocketAddr, state: Arc<AppState>) -> std::io::Result<()
 /// Unauthenticated, vault-free liveness probe.
 async fn health() -> &'static str {
     "ok"
+}
+
+/// Distill durable facts from `user_text` by asking the upstream model, returning one entry per
+/// fact (deduped at write time). On a model/network error, falls back to the raw turn so nothing
+/// is lost. Used only when `KEEPSAKE_AUTO_EXTRACT` is set; otherwise the raw turn is stored.
+async fn extract_facts(state: &AppState, model: &str, user_text: &str) -> Vec<String> {
+    let extraction = ChatRequest {
+        model: model.to_string(),
+        messages: vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: "Extract the durable facts (decisions, preferences, stable facts) from \
+                          the user's message as a short '- ' bullet list. If there are none, reply \
+                          exactly NONE."
+                    .to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: user_text.to_string(),
+            },
+        ],
+        stream: false,
+    };
+    match state
+        .http
+        .post(format!("{}/v1/chat/completions", state.ollama_url))
+        .json(&extraction)
+        .send()
+        .await
+    {
+        Ok(r) => {
+            let body: serde_json::Value = r.json().await.unwrap_or_default();
+            let content = body["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap_or("");
+            parse_facts(content)
+        }
+        Err(_) => vec![user_text.to_string()],
+    }
 }
 
 async fn chat_completions(
@@ -500,13 +556,19 @@ async fn chat_completions(
         text = Redactor::rehydrate(&text, &redaction_map);
     }
 
-    // Write-back the user's turn only if the dial and the token both permit writing.
+    // Write-back the user's turn only if the dial and the token both permit writing. With
+    // KEEPSAKE_AUTO_EXTRACT set, distill durable facts via the model and store each (deduped);
+    // otherwise store the raw turn. Either way the write-time dedup guard prevents bloat.
     if policy.write_back {
         if let Some(text) = last_user_message(&req) {
-            let _ = state
-                .memory
-                .remember(text, header("x-keepsake-capability"))
-                .await;
+            let cap = header("x-keepsake-capability");
+            if std::env::var("KEEPSAKE_AUTO_EXTRACT").is_ok() {
+                for fact in extract_facts(&state, &req.model, text).await {
+                    let _ = state.memory.remember(&fact, cap).await;
+                }
+            } else {
+                let _ = state.memory.remember(text, cap).await;
+            }
         }
     }
     {
@@ -673,6 +735,20 @@ mod tests {
             vec!["kilo kilo kilo".to_string()],
             "the gateway's write lands in — and recalls from — the shared hub"
         );
+    }
+
+    #[test]
+    fn parse_facts_extracts_bullets_and_ignores_none() {
+        assert_eq!(
+            parse_facts("- launch is March 14\n- prefers dark mode"),
+            vec!["launch is March 14".to_string(), "prefers dark mode".to_string()]
+        );
+        assert_eq!(
+            parse_facts("1. alpha\n2) beta"),
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+        assert!(parse_facts("NONE").is_empty());
+        assert!(parse_facts("  \n  none  \n").is_empty());
     }
 
     #[test]

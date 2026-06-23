@@ -26,6 +26,11 @@ impl VectorIndex {
         self.entries.len()
     }
 
+    /// The `(id, unit-normalized vector)` entries — used by consolidation to find near-duplicates.
+    pub fn entries(&self) -> &[(CellId, Vec<f32>)] {
+        &self.entries
+    }
+
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

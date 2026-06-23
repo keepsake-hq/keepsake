@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use keepsake_crypto::{Kek, RootKeys};
-use keepsake_daemon::{serve, DaemonState};
+use keepsake_daemon::{serve, spawn_consolidation, DaemonState};
 use keepsake_retrieval::FastEmbedder;
 use keepsake_store_sqlite::SqliteVault;
 use keepsake_vault::MemoryVault;
@@ -34,6 +34,7 @@ async fn main() {
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent).expect("create socket directory");
     }
+    spawn_consolidation(Arc::clone(&state), std::time::Duration::from_secs(300));
     println!("keepsake-daemon listening on {}", socket_path.display());
     serve(state, &socket_path).await.expect("daemon server error");
 }

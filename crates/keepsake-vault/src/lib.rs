@@ -57,6 +57,10 @@ pub fn open_contract_portion(
         .and_then(|(_, sealed)| keepsake_crypto::open_sealed(grantee, sealed).ok())
 }
 
+/// Default cosine-similarity threshold above which a new memory is treated as a duplicate of an
+/// existing one and not stored again — the write-time anti-bloat guard.
+pub const DEDUP_THRESHOLD: f32 = 0.92;
+
 /// A semantic memory vault over a [`SqliteVault`] and a local [`Embedder`].
 pub struct MemoryVault<E: Embedder> {
     store: SqliteVault,
@@ -84,6 +88,30 @@ impl<E: Embedder> MemoryVault<E> {
             .map_err(|e| StoreError::Embed(e.to_string()))?;
         self.index.add(id.clone(), &vector);
         Ok(id)
+    }
+
+    /// Like [`MemoryVault::remember`] but skip writing if an existing memory is at least
+    /// `threshold` cosine-similar — the write-time anti-bloat guard. Returns `(id, stored)`:
+    /// `stored == false` means a near-duplicate already existed (its id is returned) and nothing
+    /// new was written.
+    pub fn remember_deduped(
+        &mut self,
+        kek: &Kek,
+        text: &str,
+        threshold: f32,
+    ) -> Result<(CellId, bool), StoreError> {
+        let vector = self
+            .embedder
+            .embed(text)
+            .map_err(|e| StoreError::Embed(e.to_string()))?;
+        if let Some((existing, score)) = self.index.search(&vector, 1).into_iter().next() {
+            if score >= threshold {
+                return Ok((existing, false));
+            }
+        }
+        let id = self.store.remember(kek, text.as_bytes())?;
+        self.index.add(id.clone(), &vector);
+        Ok((id, true))
     }
 
     /// Semantic recall: embed `query`, search the index, decrypt up to `k` hits.
@@ -135,6 +163,36 @@ impl<E: Embedder> MemoryVault<E> {
     /// Number of live (non-forgotten) memories.
     pub fn count(&self) -> Result<usize, StoreError> {
         Ok(self.store.live_cell_ids()?.len())
+    }
+
+    /// Merge near-duplicate live memories: forget any memory at least `threshold` cosine-similar
+    /// to an earlier one, keeping a single representative. Returns the number merged away — the
+    /// background anti-bloat sweep that catches near-duplicates slipping past the write-time
+    /// guard. (Index vectors are unit-normalized, so a dot product is the cosine similarity.)
+    pub fn consolidate(&mut self, threshold: f32) -> Result<usize, StoreError> {
+        let entries: Vec<(CellId, Vec<f32>)> = self.index.entries().to_vec();
+        let mut gone: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+        for i in 0..entries.len() {
+            if gone.contains(entries[i].0.as_bytes()) {
+                continue;
+            }
+            for j in (i + 1)..entries.len() {
+                if gone.contains(entries[j].0.as_bytes()) {
+                    continue;
+                }
+                let sim: f32 = entries[i]
+                    .1
+                    .iter()
+                    .zip(&entries[j].1)
+                    .map(|(a, b)| a * b)
+                    .sum();
+                if sim >= threshold {
+                    self.forget(&entries[j].0)?;
+                    gone.insert(*entries[j].0.as_bytes());
+                }
+            }
+        }
+        Ok(gone.len())
     }
 
     /// Share a cell under a SAIHM contract: atomically seal the content to each grantee's
@@ -282,6 +340,34 @@ mod tests {
         assert_eq!(vault.count().unwrap(), 2);
         vault.forget(&a).unwrap();
         assert_eq!(vault.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn remember_deduped_skips_near_duplicates() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        let (_, stored) = vault.remember_deduped(&kek, "alpha alpha alpha", 0.95).unwrap();
+        assert!(stored, "the first write stores");
+        let (_, dup) = vault.remember_deduped(&kek, "alpha alpha alpha", 0.95).unwrap();
+        assert!(!dup, "an identical memory is not stored twice");
+        assert_eq!(vault.count().unwrap(), 1, "no duplicate cell created");
+        let (_, fresh) = vault.remember_deduped(&kek, "zulu zulu zulu", 0.95).unwrap();
+        assert!(fresh, "a clearly different memory is stored");
+        assert_eq!(vault.count().unwrap(), 2);
+    }
+
+    #[test]
+    fn consolidate_merges_near_duplicates() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        // Raw remember (no write-time dedup) creates two identical memories…
+        vault.remember(&kek, "yankee yankee yankee").unwrap();
+        vault.remember(&kek, "yankee yankee yankee").unwrap();
+        vault.remember(&kek, "distinct other thing").unwrap();
+        assert_eq!(vault.count().unwrap(), 3);
+        let merged = vault.consolidate(0.95).unwrap();
+        assert_eq!(merged, 1, "the duplicate is merged away");
+        assert_eq!(vault.count().unwrap(), 2);
     }
 
     #[test]

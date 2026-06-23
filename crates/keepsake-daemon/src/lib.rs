@@ -74,6 +74,7 @@ impl<E: Embedder> DaemonState<E> {
             "vault/recall" => self.recall(id, &params, &caller),
             "vault/forget" => self.forget(id, &params, &caller),
             "vault/status" => self.status(id, &caller),
+            "vault/consolidate" => self.consolidate(id, &caller),
             other => rpc_error(id, -32601, &format!("method not found: {other}")),
         }
     }
@@ -86,8 +87,11 @@ impl<E: Embedder> DaemonState<E> {
             return rpc_error(id, -32602, "remember requires params.text (string)");
         };
         let mut vault = self.vault.lock().expect("vault mutex poisoned");
-        match vault.remember(&self.kek, text) {
-            Ok(cell_id) => rpc_ok(id, json!({ "cell_id": hex::encode(cell_id.as_bytes()) })),
+        match vault.remember_deduped(&self.kek, text, keepsake_vault::DEDUP_THRESHOLD) {
+            Ok((cell_id, stored)) => rpc_ok(
+                id,
+                json!({ "cell_id": hex::encode(cell_id.as_bytes()), "stored": stored }),
+            ),
             Err(e) => rpc_error(id, -32010, &format!("remember failed: {e:?}")),
         }
     }
@@ -141,6 +145,17 @@ impl<E: Embedder> DaemonState<E> {
         match vault.count() {
             Ok(n) => rpc_ok(id, json!({ "memories": n })),
             Err(e) => rpc_error(id, -32010, &format!("status failed: {e:?}")),
+        }
+    }
+
+    fn consolidate(&self, id: Value, caller: &Caller) -> Value {
+        if !caller.can_admin() {
+            return rpc_error(id, -32001, "capability does not permit consolidate");
+        }
+        let mut vault = self.vault.lock().expect("vault mutex poisoned");
+        match vault.consolidate(keepsake_vault::DEDUP_THRESHOLD) {
+            Ok(merged) => rpc_ok(id, json!({ "merged": merged })),
+            Err(e) => rpc_error(id, -32010, &format!("consolidate failed: {e:?}")),
         }
     }
 }
@@ -234,6 +249,26 @@ where
         write_half.write_all(&bytes).await?;
     }
     Ok(())
+}
+
+/// Spawn a background task that consolidates the vault every `period`, merging near-duplicate
+/// memories so the store stays lean over time. Returns the task handle.
+pub fn spawn_consolidation<E>(
+    state: Arc<DaemonState<E>>,
+    period: std::time::Duration,
+) -> tokio::task::JoinHandle<()>
+where
+    E: Embedder + Send + Sync + 'static,
+{
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(period);
+        loop {
+            tick.tick().await;
+            if let Ok(mut vault) = state.vault.lock() {
+                let _ = vault.consolidate(keepsake_vault::DEDUP_THRESHOLD);
+            }
+        }
+    })
 }
 
 /// A thin client to a running daemon over its Unix socket. MCP, proxy and desktop use this
@@ -411,6 +446,48 @@ mod tests {
             .recall(&kek, "mike mike mike", 1)
             .unwrap();
         assert_eq!(hits[0].1, "mike mike mike");
+    }
+
+    #[test]
+    fn daemon_dedups_identical_writes() {
+        let (state, _) = test_state();
+        state.handle(&remember_req("november november november", None));
+        state.handle(&remember_req("november november november", None));
+        let r = state.handle(&json!({
+            "jsonrpc": "2.0", "id": 9, "method": "vault/status", "params": {}
+        }));
+        assert_eq!(
+            r["result"]["memories"], 1,
+            "two identical writes dedup to one memory: {r}"
+        );
+    }
+
+    #[test]
+    fn daemon_consolidate_merges_duplicates() {
+        let roots = RootKeys::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(MemoryVault::new(
+            SqliteVault::open_in_memory().unwrap(),
+            MockEmbedder::new(64),
+        )));
+        {
+            // Inject two identical memories via raw remember (bypassing the write-time guard).
+            let kek = Kek::from_root(&roots.encryption_root);
+            let mut v = shared.lock().unwrap();
+            v.remember(&kek, "oscar oscar oscar").unwrap();
+            v.remember(&kek, "oscar oscar oscar").unwrap();
+        }
+        let state = DaemonState::from_shared(
+            std::sync::Arc::clone(&shared),
+            Kek::from_root(&roots.encryption_root),
+            roots.capability_root(),
+        );
+        let r = state.handle(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "vault/consolidate", "params": {}
+        }));
+        assert_eq!(
+            r["result"]["merged"], 1,
+            "consolidate merges the duplicate: {r}"
+        );
     }
 
     use std::sync::Arc;
