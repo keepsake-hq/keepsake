@@ -518,6 +518,24 @@ impl<E: Embedder> MemoryVault<E> {
         self.graph = graph;
         Ok(())
     }
+
+    /// Export the whole vault as a portable, encrypted [`keepsake_store_sqlite::Passport`] —
+    /// sealed records + tombstones, inert without the seed.
+    pub fn export_passport(&self) -> Result<keepsake_store_sqlite::Passport, StoreError> {
+        self.store.export_passport()
+    }
+
+    /// Import a passport (merge; local erasures always win), then rebuild the index so the imported
+    /// memories are immediately recallable. Returns how many records were applied.
+    pub fn import_passport(
+        &mut self,
+        kek: &Kek,
+        passport: &keepsake_store_sqlite::Passport,
+    ) -> Result<usize, StoreError> {
+        let n = self.store.import_passport(passport)?;
+        self.rebuild_index(kek)?;
+        Ok(n)
+    }
 }
 
 /// Current wall-clock time in Unix seconds (0 if the clock predates the epoch).

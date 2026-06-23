@@ -53,6 +53,10 @@ enum Cmd {
     },
     /// Print a ready-to-paste MCP config (hub socket + a fresh token) for Claude/Cursor/Codex.
     McpConfig,
+    /// Export the whole vault to a portable, encrypted passport file (stays sealed to your seed).
+    Export { file: String },
+    /// Import a passport file into this vault (merges; your erasures always win).
+    Import { file: String },
     /// Social recovery: split or recombine the seed into Shamir shares.
     #[command(subcommand)]
     Recovery(RecoveryCmd),
@@ -199,6 +203,21 @@ fn main() {
             eprintln!(
                 "\nStart the hub first:  keepsake serve\nThen paste the JSON above into your MCP client's config (e.g. Claude Desktop)."
             );
+        }
+        Cmd::Export { file } => {
+            let (vault, _kek) = load();
+            let passport = vault.export_passport().expect("export passport");
+            let json = serde_json::to_vec_pretty(&passport).expect("serialize passport");
+            std::fs::write(&file, json).expect("write passport file");
+            eprintln!("exported {} memories to {file}", passport.records.len());
+        }
+        Cmd::Import { file } => {
+            let (mut vault, kek) = load();
+            let bytes = std::fs::read(&file).expect("read passport file");
+            let passport: keepsake_store_sqlite::Passport =
+                serde_json::from_slice(&bytes).expect("parse passport file");
+            let n = vault.import_passport(&kek, &passport).expect("import passport");
+            println!("imported {n} records from {file}");
         }
         Cmd::Recovery(action) => match action {
             RecoveryCmd::Split { threshold, shares } => {

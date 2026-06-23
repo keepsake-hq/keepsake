@@ -46,6 +46,15 @@ pub struct CellRecord {
     pub wrapped: Vec<u8>,
 }
 
+/// A portable "memory passport": every live cell's **sealed** record plus the tombstones. Inert
+/// without the holder's seed, so it is safe to write to a file and carry to another device — or a
+/// future SAIHM-compatible vault. Importing it merges into a vault; local erasures always win.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Passport {
+    pub records: Vec<CellRecord>,
+    pub tombstones: Vec<[u8; 32]>,
+}
+
 /// A knowledge-graph edge as read back from the store:
 /// `(source_cell, subject, relation, object)`.
 pub type EdgeRow = ([u8; 32], String, String, String);
@@ -516,6 +525,26 @@ impl SqliteVault {
         }
         Ok(out)
     }
+
+    /// Export the whole live vault as a portable [`Passport`] (sealed records + tombstones).
+    pub fn export_passport(&self) -> Result<Passport, StoreError> {
+        Ok(Passport {
+            records: self.export_live_records()?,
+            tombstones: self.tombstone_ids()?,
+        })
+    }
+
+    /// Import a [`Passport`]: apply each record (forged or locally-tombstoned ones are dropped by
+    /// [`import_record`](Self::import_record)) then each tombstone. Returns records attempted.
+    pub fn import_passport(&self, passport: &Passport) -> Result<usize, StoreError> {
+        for rec in &passport.records {
+            self.import_record(rec)?;
+        }
+        for t in &passport.tombstones {
+            self.apply_tombstone(t)?;
+        }
+        Ok(passport.records.len())
+    }
 }
 
 /// Convert a stored blob into a 12-byte AES-GCM nonce.
@@ -603,6 +632,34 @@ mod tests {
         let edges = vault.live_edges().unwrap();
         assert_eq!(edges.len(), 1, "forgetting cell a cascades to drop its edge");
         assert_eq!(edges[0].3, "Eduard", "only cell b's edge remains");
+    }
+
+    #[test]
+    fn passport_round_trips_and_rejects_forged_records() {
+        let kek = test_kek();
+        let a = SqliteVault::open_in_memory().unwrap();
+        a.remember(&kek, b"portable memory").unwrap();
+        let id2 = a.remember(&kek, b"another fact").unwrap();
+        let mut passport = a.export_passport().unwrap();
+        assert_eq!(passport.records.len(), 2);
+
+        // A forged record (cell_id not matching its ciphertext) must be dropped on import.
+        let mut forged = passport.records[0].clone();
+        forged.cell_id = [0xCD; 32];
+        passport.records.push(forged);
+
+        let b = SqliteVault::open_in_memory().unwrap();
+        b.import_passport(&passport).unwrap();
+        assert_eq!(
+            b.recall(&kek, &id2).unwrap().as_deref(),
+            Some(&b"another fact"[..]),
+            "genuine memories carry across the passport"
+        );
+        assert_eq!(
+            b.live_cell_ids().unwrap().len(),
+            2,
+            "the forged record was dropped"
+        );
     }
 
     #[test]
