@@ -92,3 +92,39 @@ jobs:
           prerelease: false
           includeUpdaterJson: false
           args: --target aarch64-apple-darwin --bundles app dmg
+
+  # Linux server binaries (the hub, CLI and proxy) — so Keepsake can run as a shared
+  # memory hub on a VPS, not only the macOS desktop. Attached to the same release.
+  release-linux:
+    needs: release-macos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: swatinem/rust-cache@v2
+
+      - name: Resolve release tag
+        id: rel
+        run: echo "tag=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Linux binaries (hub + cli + proxy)
+        run: cargo build --release -p keepsake-daemon -p keepsake-cli -p keepsake-proxy
+
+      - name: Package + checksum
+        run: |
+          mkdir -p dist
+          tar -C target/release -czf dist/keepsake-linux-x86_64.tar.gz keepsake-daemon keepsake keepsake-proxy
+          ( cd dist && sha256sum keepsake-linux-x86_64.tar.gz > keepsake-linux-x86_64.tar.gz.sha256 )
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.rel.outputs.tag }}
+          files: |
+            dist/keepsake-linux-x86_64.tar.gz
+            dist/keepsake-linux-x86_64.tar.gz.sha256

@@ -1,0 +1,7 @@
+target/
+apps/desktop/src-tauri/target/
+.git/
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/keepsake-receipts.log
