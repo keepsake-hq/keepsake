@@ -16,6 +16,7 @@ use keepsake_store_sqlite::SqliteVault;
 use keepsake_vault::MemoryVault;
 use tauri::path::BaseDirectory;
 use tauri::{Manager, State};
+use tauri_plugin_updater::UpdaterExt;
 
 const PROFILE: &str = "SAIHM Cell-/Tool-compatible, local receipt profile";
 
@@ -269,6 +270,31 @@ fn status(state: State<AppState>) -> Result<VaultStatus, String> {
     with_vault(&state, |vault, _kek| vault_status(vault))
 }
 
+/// Check the signed update feed; returns the new version string if one is available.
+#[tauri::command]
+async fn check_update(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    match updater.check().await {
+        Ok(Some(update)) => Ok(Some(update.version)),
+        Ok(None) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Download + install the available update (signature-verified by the plugin), then restart.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+    update
+        .download_and_install(|_chunk_len, _content_len| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
+    app.restart();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -281,6 +307,9 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -294,7 +323,9 @@ pub fn run() {
             recall,
             recent,
             forget,
-            status
+            status,
+            check_update,
+            install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

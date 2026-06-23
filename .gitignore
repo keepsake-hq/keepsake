@@ -13,3 +13,7 @@ Cargo.lock.bak
 
 # Build artifacts
 *.dmg
+
+# Signing keys — NEVER commit. The updater private key lives outside the repo (~/.keepsake/).
+*.key
+*.key.pub

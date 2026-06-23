@@ -457,6 +457,41 @@ const DEMO_MEMORIES = (() => {
   ];
 })();
 
+// ---------- self-update ----------
+async function checkForUpdate() {
+  if (DEMO || !invoke) return;
+  try {
+    const version = await invoke("check_update");
+    if (version) showUpdateBanner(version);
+  } catch (_) {}
+}
+
+function showUpdateBanner(version) {
+  if (document.getElementById("update-banner")) return;
+  const bar = document.createElement("div");
+  bar.id = "update-banner";
+  bar.className =
+    "fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-3 bg-brand-600 text-white text-sm py-2 px-4 shadow-md";
+  bar.innerHTML =
+    `<span>Update <b>${escapeHtml(version)}</b> ist verfügbar.</span>` +
+    `<button id="update-now" class="rounded-md bg-white text-brand-700 hover:bg-brand-50 px-3 py-1 font-medium transition">Jetzt aktualisieren</button>` +
+    `<button id="update-later" class="text-white text-xs hover:underline">Später</button>`;
+  document.body.appendChild(bar);
+  $("#update-now").addEventListener("click", async () => {
+    const btn = $("#update-now");
+    btn.textContent = "Lädt & installiert…";
+    btn.disabled = true;
+    try {
+      // On success the app downloads, verifies the signature, installs, and restarts.
+      await invoke("install_update");
+    } catch (_) {
+      btn.textContent = "Fehler — später erneut";
+      btn.disabled = false;
+    }
+  });
+  $("#update-later").addEventListener("click", () => bar.remove());
+}
+
 // ---------- boot ----------
 (async () => {
   if (DEMO) {
@@ -473,6 +508,7 @@ const DEMO_MEMORIES = (() => {
     }
     return;
   }
+  checkForUpdate(); // fire-and-forget: show a banner if a signed update is available
   try {
     const isLocked = await invoke("locked");
     if (!isLocked) {

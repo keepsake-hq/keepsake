@@ -42,6 +42,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "macOS": {
       "signingIdentity": "-"
@@ -55,6 +56,14 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU1OTVBNTFENTBCN0Q0OUEKUldTYTFMZFFIYVdWVlpNa0FVQnkxaUl2MlJYWERwUyt0NlB2YWFDYVBKR3BnMUg2RWd1U3oyanoK",
+      "endpoints": [
+        "https://github.com/keepsake-hq/keepsake/releases/latest/download/latest.json"
+      ]
     }
   }
 }
