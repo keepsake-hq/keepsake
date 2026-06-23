@@ -227,6 +227,7 @@ where
 /// A thin client to a running daemon over its Unix socket. MCP, proxy and desktop use this
 /// to read and write the shared vault with a scoped capability token — never the raw seed.
 /// Each call is one request/response on a fresh connection (cheap over a local socket).
+#[derive(Clone)]
 pub struct DaemonClient {
     socket_path: PathBuf,
     capability: Option<String>,

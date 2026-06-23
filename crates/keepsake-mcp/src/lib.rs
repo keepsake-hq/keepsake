@@ -6,6 +6,7 @@
 
 use keepsake_core::CellId;
 use keepsake_crypto::Kek;
+use keepsake_daemon::DaemonClient;
 use keepsake_firewall::capability::{Authorization, CapabilityToken};
 use keepsake_retrieval::Embedder;
 use keepsake_vault::MemoryVault;
@@ -182,6 +183,43 @@ impl<E: Embedder> ToolRouter<E> {
     }
 }
 
+/// The tool surface behind the MCP transport: a local [`ToolRouter`] (its own vault) or a
+/// [`DaemonBackend`] (a thin client of the shared daemon). Making the transport generic over
+/// this lets the same `serve_stdio`/`handle_message` drive either — so the MCP server can run
+/// against a private vault OR connect to one shared daemon with a capability token.
+pub trait ToolBackend {
+    /// Whether unauthenticated `tools/call` is permitted (the owner launched this process).
+    fn owner_session(&self) -> bool;
+    /// Dispatch a tool call with owner authority. Returns JSON (`{"error": ...}` on failure).
+    fn dispatch(&mut self, tool: &str, args: &Value) -> Value;
+    /// Dispatch a tool call under a capability token at unix time `now`.
+    fn dispatch_authorized(
+        &mut self,
+        token: &CapabilityToken,
+        now: u64,
+        tool: &str,
+        args: &Value,
+    ) -> Value;
+}
+
+impl<E: Embedder> ToolBackend for ToolRouter<E> {
+    fn owner_session(&self) -> bool {
+        ToolRouter::owner_session(self)
+    }
+    fn dispatch(&mut self, tool: &str, args: &Value) -> Value {
+        ToolRouter::dispatch(self, tool, args)
+    }
+    fn dispatch_authorized(
+        &mut self,
+        token: &CapabilityToken,
+        now: u64,
+        tool: &str,
+        args: &Value,
+    ) -> Value {
+        ToolRouter::dispatch_authorized(self, token, now, tool, args)
+    }
+}
+
 /// Whether `auth` grants the permission a tool needs. Read, write, and admin are distinct —
 /// write does not imply read.
 fn auth_allows_tool(auth: &Authorization, tool: &str) -> bool {
@@ -225,7 +263,7 @@ fn tool_definitions() -> Vec<Value> {
 }
 
 /// Handle one JSON-RPC message; returns the response (or `None` for notifications).
-pub fn handle_message<E: Embedder>(router: &mut ToolRouter<E>, msg: &Value) -> Option<Value> {
+pub fn handle_message<B: ToolBackend>(backend: &mut B, msg: &Value) -> Option<Value> {
     let id = msg.get("id").cloned().unwrap_or(Value::Null);
     let method = msg.get("method").and_then(|m| m.as_str())?;
     match method {
@@ -266,10 +304,10 @@ pub fn handle_message<E: Embedder>(router: &mut ToolRouter<E>, msg: &Value) -> O
                 .and_then(|c| c.as_str())
             {
                 Some(tok_hex) => match CapabilityToken::decode_hex(tok_hex) {
-                    Some(token) => router.dispatch_authorized(&token, now_unix(), name, &args),
+                    Some(token) => backend.dispatch_authorized(&token, now_unix(), name, &args),
                     None => json!({"error": "malformed capability token"}),
                 },
-                None if router.owner_session() => router.dispatch(name, &args),
+                None if backend.owner_session() => backend.dispatch(name, &args),
                 None => json!({"error": "capability token required"}),
             };
             Some(json!({
@@ -285,7 +323,7 @@ pub fn handle_message<E: Embedder>(router: &mut ToolRouter<E>, msg: &Value) -> O
 }
 
 /// Serve the MCP protocol over stdio until stdin closes.
-pub fn serve_stdio<E: Embedder>(router: &mut ToolRouter<E>) -> std::io::Result<()> {
+pub fn serve_stdio<B: ToolBackend>(backend: &mut B) -> std::io::Result<()> {
     use std::io::{BufRead, Write};
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -297,13 +335,98 @@ pub fn serve_stdio<E: Embedder>(router: &mut ToolRouter<E>) -> std::io::Result<(
         let Ok(msg) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if let Some(response) = handle_message(router, &msg) {
+        if let Some(response) = handle_message(backend, &msg) {
             let mut out = stdout.lock();
             writeln!(out, "{response}")?;
             out.flush()?;
         }
     }
     Ok(())
+}
+
+/// A [`ToolBackend`] that forwards every tool call to a running keepsake daemon over its Unix
+/// socket, authenticating with a capability token instead of holding the seed. This is what
+/// Claude Desktop / Cursor / Codex spawn, so they all share one live vault.
+pub struct DaemonBackend {
+    client: DaemonClient,
+    runtime: tokio::runtime::Runtime,
+}
+
+impl DaemonBackend {
+    /// Connect to the daemon at `socket_path`. With `capability` (hex) every call carries that
+    /// scoped token; without it, the connection acts as the local owner.
+    pub fn connect(
+        socket_path: impl Into<std::path::PathBuf>,
+        capability: Option<String>,
+    ) -> std::io::Result<Self> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let mut client = DaemonClient::new(socket_path);
+        if let Some(cap) = capability {
+            client = client.with_capability(cap);
+        }
+        Ok(Self { client, runtime })
+    }
+
+    fn run(&self, tool: &str, args: &Value, token: Option<String>) -> Value {
+        let client = match token {
+            Some(t) => self.client.clone().with_capability(t),
+            None => self.client.clone(),
+        };
+        match self.runtime.block_on(daemon_call(&client, tool, args)) {
+            Ok(resp) => unwrap_rpc(resp),
+            Err(e) => json!({ "error": format!("daemon unreachable: {e}") }),
+        }
+    }
+}
+
+impl ToolBackend for DaemonBackend {
+    fn owner_session(&self) -> bool {
+        true
+    }
+    fn dispatch(&mut self, tool: &str, args: &Value) -> Value {
+        self.run(tool, args, None)
+    }
+    fn dispatch_authorized(
+        &mut self,
+        token: &CapabilityToken,
+        _now: u64,
+        tool: &str,
+        args: &Value,
+    ) -> Value {
+        // The daemon verifies the token (and its expiry) against its own capability root.
+        self.run(tool, args, Some(token.encode_hex()))
+    }
+}
+
+async fn daemon_call(client: &DaemonClient, tool: &str, args: &Value) -> std::io::Result<Value> {
+    match tool {
+        "saihm_remember" => client.remember(args["text"].as_str().unwrap_or("")).await,
+        "saihm_recall" => {
+            client
+                .recall(
+                    args["query"].as_str().unwrap_or(""),
+                    args["k"].as_u64().unwrap_or(4) as usize,
+                )
+                .await
+        }
+        "saihm_forget" => client.forget(args["cell_id"].as_str().unwrap_or("")).await,
+        "saihm_status" => client.status().await,
+        other => Ok(json!({ "error": { "message": format!("unknown tool: {other}") } })),
+    }
+}
+
+/// Collapse a daemon JSON-RPC reply into the MCP dispatch shape: the inner `result` on
+/// success, or `{"error": <message>}`.
+fn unwrap_rpc(resp: Value) -> Value {
+    if let Some(result) = resp.get("result") {
+        result.clone()
+    } else if let Some(message) = resp.get("error").and_then(|e| e.get("message")) {
+        json!({ "error": message })
+    } else {
+        json!({ "error": "daemon returned an empty response" })
+    }
 }
 
 #[cfg(test)]
@@ -373,6 +496,90 @@ mod tests {
         let mut router = test_router();
         let g = router.dispatch("saihm_governance_vote", &json!({}));
         assert!(g["disabled"].is_string());
+    }
+
+    fn tools_call(name: &str, args: Value) -> Value {
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}})
+    }
+
+    fn wait_backend(sock: &std::path::Path, cap: Option<String>) -> DaemonBackend {
+        let mut b = DaemonBackend::connect(sock.to_str().unwrap().to_string(), cap).unwrap();
+        for _ in 0..60 {
+            if b.dispatch("saihm_status", &json!({})).get("error").is_none() {
+                return b;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!("daemon-backed MCP could not reach the daemon");
+    }
+
+    #[test]
+    fn daemon_backed_mcp_roundtrips_and_enforces_token() {
+        use keepsake_firewall::capability::{CapabilityToken, Caveat};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("daemon.sock");
+        let cap_root = test_cap_root();
+
+        // Run the daemon on its own thread + runtime; it holds the one shared vault.
+        let sock_srv = sock.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                let roots = RootKeys::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+                let kek = Kek::from_root(&roots.encryption_root);
+                let vault =
+                    MemoryVault::new(SqliteVault::open_in_memory().unwrap(), MockEmbedder::new(64));
+                let state = Arc::new(keepsake_daemon::DaemonState::new(
+                    vault,
+                    kek,
+                    roots.capability_root(),
+                ));
+                keepsake_daemon::serve(state, &sock_srv).await.unwrap();
+            });
+        });
+
+        // Owner-mode MCP backend drives tools/call straight through to the daemon.
+        let mut owner = wait_backend(&sock, None);
+        let r = handle_message(
+            &mut owner,
+            &tools_call("saihm_remember", json!({"text": "india india india"})),
+        )
+        .unwrap();
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("cell_id"), "remember via daemon-backed MCP: {text}");
+
+        let r = handle_message(
+            &mut owner,
+            &tools_call("saihm_recall", json!({"query":"india india india","k":1})),
+        )
+        .unwrap();
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("india india india"),
+            "recall via daemon-backed MCP: {text}"
+        );
+
+        // A read-only-token backend is refused a write by the daemon itself.
+        let read_tok =
+            CapabilityToken::issue(&cap_root, vec![Caveat::new("capability", "memory:read")])
+                .encode_hex();
+        let mut reader =
+            DaemonBackend::connect(sock.to_str().unwrap().to_string(), Some(read_tok)).unwrap();
+        let r = handle_message(
+            &mut reader,
+            &tools_call("saihm_remember", json!({"text":"nope"})),
+        )
+        .unwrap();
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("error"),
+            "read-only token must not write via daemon: {text}"
+        );
     }
 
     #[test]

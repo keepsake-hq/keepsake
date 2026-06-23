@@ -17,5 +17,10 @@ keepsake-store-sqlite = { path = "../keepsake-store-sqlite" }
 keepsake-retrieval = { path = "../keepsake-retrieval" }
 keepsake-vault = { path = "../keepsake-vault" }
 keepsake-firewall = { path = "../keepsake-firewall" }
+keepsake-daemon = { path = "../keepsake-daemon" }
 serde_json = "1"
 hex = "0.4"
+tokio = { version = "1", features = ["rt", "net", "io-util", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
