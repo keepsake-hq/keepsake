@@ -1,0 +1,16 @@
+[package]
+name = "keepsake-daemon"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/keepsake-hq/keepsake"
+
+[dependencies]
+keepsake-core = { path = "../keepsake-core" }
+keepsake-crypto = { path = "../keepsake-crypto" }
+keepsake-vault = { path = "../keepsake-vault" }
+keepsake-retrieval = { path = "../keepsake-retrieval" }
+keepsake-store-sqlite = { path = "../keepsake-store-sqlite" }
+keepsake-firewall = { path = "../keepsake-firewall" }
+serde_json = "1"
+hex = "0.4"

@@ -9,6 +9,7 @@ members = [
     "crates/keepsake-proxy",
     "crates/keepsake-firewall",
     "crates/keepsake-mcp",
+    "crates/keepsake-daemon",
     "crates/keepsake-cli",
     "crates/keepsake-sync",
     "crates/keepsake-relay",
