@@ -671,6 +671,47 @@ mod tests {
         assert_eq!(hits.len(), 1, "B should recall A's memory after auto-sync");
     }
 
+    /// Live end-to-end: two vaults converge through a REAL relay URL. Ignored by default + only
+    /// runs when KEEPSAKE_E2E_RELAY is set, so it never touches CI.
+    ///   KEEPSAKE_E2E_RELAY=https://sync.keepsakehq.app cargo test -p keepsake-daemon --ignored e2e
+    #[tokio::test]
+    #[ignore]
+    async fn e2e_two_vaults_converge_through_a_live_relay() {
+        let Ok(url) = std::env::var("KEEPSAKE_E2E_RELAY") else {
+            return;
+        };
+        // A distinct passphrase → a distinct, unguessable slot (won't collide with real users).
+        let roots = RootKeys::from_mnemonic(TEST_MNEMONIC, "e2e").unwrap();
+        let slot = hex::encode(roots.sync_slot());
+        let write_token = roots.sync_write_token();
+        let sync_key = roots.sync_mac_key();
+        let kek = Kek::from_root(&roots.encryption_root);
+        let cap = roots.capability_root();
+        let client = keepsake_relay::RelayClient::new(&url, "");
+
+        let mut va = MemoryVault::new(SqliteVault::open_in_memory().unwrap(), MockEmbedder::new(64));
+        va.remember(&kek, "the eiffel tower is in paris").unwrap();
+        let a = Arc::new(DaemonState::new(va, Kek::from_root(&roots.encryption_root), cap));
+        let b = Arc::new(DaemonState::new(
+            MemoryVault::new(SqliteVault::open_in_memory().unwrap(), MockEmbedder::new(64)),
+            Kek::from_root(&roots.encryption_root),
+            cap,
+        ));
+
+        sync_once(&a, &client, &slot, &write_token, &sync_key)
+            .await
+            .unwrap();
+        sync_once(&b, &client, &slot, &write_token, &sync_key)
+            .await
+            .unwrap();
+
+        let hits = {
+            let v = b.vault.lock().unwrap();
+            v.recall(&kek, "the eiffel tower is in paris", 1).unwrap()
+        };
+        assert_eq!(hits.len(), 1, "device B recalls A's memory after syncing through {url}");
+    }
+
     fn remember_req(text: &str, cap: Option<&str>) -> Value {
         let mut params = json!({ "text": text });
         if let Some(c) = cap {

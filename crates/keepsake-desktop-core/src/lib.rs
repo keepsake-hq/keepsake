@@ -23,7 +23,7 @@ pub enum SyncConfig {
 }
 
 /// The hosted relay endpoint (anonymous, Cloudflare-fronted; the origin server stays hidden).
-pub const HOSTED_RELAY_URL: &str = "https://sync.keepsake.app";
+pub const HOSTED_RELAY_URL: &str = "https://sync.keepsakehq.app";
 
 impl SyncConfig {
     /// The relay URL to sync with, or `None` if syncing is off or the custom URL is blank.
