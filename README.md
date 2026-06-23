@@ -25,6 +25,8 @@
 >
 > This honesty is the point. If a memory tool tells you cloud inference is "zero-knowledge," it is lying to you.
 
+> **Young & unaudited.** Keepsake is v0.x, built in the open and **not yet externally audited**. See [SECURITY.md](SECURITY.md) for the honest threat model (including exactly how the seed is handled and how the shared daemon reduces that exposure) and how to report a vulnerability.
+
 ## What it is
 
 Most "AI memory" lives on someone else's servers, tied to one vendor, readable by them, gone if they shut down. Keepsake flips that: your memory is a **single encrypted file on your machine**, unlocked by a **BIP-39 seed phrase** you alone hold. Point any OpenAI-compatible client at the local proxy, or connect an MCP-capable agent, and the model gains a long-term memory that **never leaves your device** unless you explicitly send it.
