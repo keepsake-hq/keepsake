@@ -57,6 +57,11 @@ enum Cmd {
     Export { file: String },
     /// Import a passport file into this vault (merges; your erasures always win).
     Import { file: String },
+    /// Back up your vault to a self-hosted server, end-to-end encrypted. OPAQUE: the server checks
+    /// your KEEPSAKE_BACKUP_PASSWORD without ever seeing it, your seed, or the plaintext.
+    Backup { url: String },
+    /// Restore your vault from such a backup (merges into the local vault).
+    Restore { url: String },
     /// Social recovery: split or recombine the seed into Shamir shares.
     #[command(subcommand)]
     Recovery(RecoveryCmd),
@@ -219,6 +224,53 @@ fn main() {
             let n = vault.import_passport(&kek, &passport).expect("import passport");
             println!("imported {n} records from {file}");
         }
+        Cmd::Backup { url } => {
+            let password = std::env::var("KEEPSAKE_BACKUP_PASSWORD")
+                .expect("set KEEPSAKE_BACKUP_PASSWORD (the backup password — never your seed)");
+            let (vault, _kek) = load();
+            let passport = vault.export_passport().expect("export passport");
+            let bytes = serde_json::to_vec(&passport).expect("serialize passport");
+            let count = passport.records.len();
+            let id = backup_id();
+            run_async(async move {
+                let client = keepsake_relay::BackupRelayClient::new(&url);
+                // No account yet → register this password once, then log in.
+                let (session_key, export_key) = match client.login(&id, password.as_bytes()).await {
+                    Ok(v) => v,
+                    Err(keepsake_relay::RelayError::Status(404)) => {
+                        client.register(&id, password.as_bytes()).await.expect("register");
+                        client.login(&id, password.as_bytes()).await.expect("login")
+                    }
+                    Err(_) => panic!("backup login failed (wrong password?)"),
+                };
+                let blob = keepsake_backup::lock_blob(&export_key, &bytes).expect("lock blob");
+                client.upload(&id, &session_key, blob).await.expect("upload");
+            });
+            eprintln!("backed up {count} memories (encrypted; the server never sees them).");
+        }
+        Cmd::Restore { url } => {
+            let password =
+                std::env::var("KEEPSAKE_BACKUP_PASSWORD").expect("set KEEPSAKE_BACKUP_PASSWORD");
+            let (mut vault, kek) = load();
+            let id = backup_id();
+            let n = run_async(async move {
+                let client = keepsake_relay::BackupRelayClient::new(&url);
+                let (session_key, export_key) = client
+                    .login(&id, password.as_bytes())
+                    .await
+                    .expect("backup login (wrong password?)");
+                let blob = client
+                    .download(&id, &session_key)
+                    .await
+                    .expect("download")
+                    .expect("no backup found on the server");
+                let bytes = keepsake_backup::unlock_blob(&export_key, &blob).expect("unlock blob");
+                let passport: keepsake_store_sqlite::Passport =
+                    serde_json::from_slice(&bytes).expect("parse passport");
+                vault.import_passport(&kek, &passport).expect("import passport")
+            });
+            println!("restored {n} records from backup.");
+        }
         Cmd::Recovery(action) => match action {
             RecoveryCmd::Split { threshold, shares } => {
                 let mnemonic = std::env::var("KEEPSAKE_MNEMONIC").expect("set KEEPSAKE_MNEMONIC");
@@ -331,6 +383,25 @@ fn cap_root() -> [u8; 32] {
     RootKeys::from_mnemonic(&mnemonic, "")
         .expect("valid BIP-39 mnemonic")
         .capability_root()
+}
+
+/// A stable, non-secret backup account id derived from the seed via a one-way hash, so the relay
+/// can key your blob without learning anything about the seed.
+fn backup_id() -> String {
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
+    h.update(b"keepsake/v1/backup-id");
+    h.update(cap_root());
+    hex::encode(&h.finalize()[..16])
+}
+
+/// Run a future to completion on a small current-thread runtime (for the HTTP backup commands).
+fn run_async<F: std::future::Future>(f: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
+        .block_on(f)
 }
 
 /// Mint a capability token: `read` only → recall, `write` only → remember, neither → full

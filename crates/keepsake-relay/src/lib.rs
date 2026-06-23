@@ -17,9 +17,10 @@ use axum::{
     extract::{Path as AxumPath, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, put},
-    Router,
+    routing::{get, post, put},
+    Json, Router,
 };
+use std::collections::HashMap;
 use keepsake_store_sqlite::SqliteVault;
 use keepsake_sync::SyncState;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -30,6 +31,8 @@ pub enum RelayError {
     Http(reqwest::Error),
     Store(keepsake_store_sqlite::StoreError),
     Status(u16),
+    /// An OPAQUE backup step failed (e.g. wrong password) or a malformed server response.
+    Backup,
 }
 
 impl From<reqwest::Error> for RelayError {
@@ -40,6 +43,11 @@ impl From<reqwest::Error> for RelayError {
 impl From<keepsake_store_sqlite::StoreError> for RelayError {
     fn from(e: keepsake_store_sqlite::StoreError) -> Self {
         RelayError::Store(e)
+    }
+}
+impl From<keepsake_backup::BackupError> for RelayError {
+    fn from(_: keepsake_backup::BackupError) -> Self {
+        RelayError::Backup
     }
 }
 
@@ -111,13 +119,24 @@ fn now_unix() -> i64 {
 struct RelayState {
     token: String,
     store: BlobStore,
+    backup: BackupState,
 }
 
 /// Build the relay router with a bearer `token` over a (file-backed) [`BlobStore`].
 pub fn app(token: String, store: BlobStore) -> Router {
-    let state = Arc::new(RelayState { token, store });
+    let backup = BackupState::new(&store);
+    let state = Arc::new(RelayState {
+        token,
+        store,
+        backup,
+    });
     Router::new()
         .route("/v1/blob/{slot}", put(put_blob).get(get_blob))
+        .route("/v1/backup/register/start", post(backup_register_start))
+        .route("/v1/backup/register/finish", post(backup_register_finish))
+        .route("/v1/backup/login/start", post(backup_login_start))
+        .route("/v1/backup/login/finish", post(backup_login_finish))
+        .route("/v1/backup/blob/{id}", put(backup_put).get(backup_get))
         .route("/health", get(|| async { "ok" }))
         .layer(axum::extract::DefaultBodyLimit::max(
             keepsake_sync::MAX_SNAPSHOT_BYTES,
@@ -271,6 +290,336 @@ pub async fn pull_and_apply(
     }
 }
 
+// ---- OPAQUE zero-knowledge backup (server endpoints + client) ----
+//
+// The relay validates the user's password (OPAQUE) and stores only a blind password file plus an
+// opaque ciphertext — never the password, the seed, or the plaintext. After a successful login,
+// the derived session key gates blob upload/download; the password-derived export key (which the
+// relay never sees) locks the blob.
+
+/// In-memory OPAQUE state for the backup endpoints: the server's long-term setup (persisted in the
+/// blob store so password files survive a restart), pending logins (between the two round-trips),
+/// and the session keys that gate blob access after a successful login.
+struct BackupState {
+    server_setup: Vec<u8>,
+    pending: Mutex<HashMap<String, (String, Vec<u8>)>>,
+    tokens: Mutex<HashMap<String, Vec<u8>>>,
+}
+
+impl BackupState {
+    fn new(store: &BlobStore) -> Self {
+        let server_setup = match store.get("backup:server-setup").ok().flatten() {
+            Some(s) => s,
+            None => {
+                let s = keepsake_backup::server_setup_new();
+                let _ = store.put("backup:server-setup", &s);
+                s
+            }
+        };
+        BackupState {
+            server_setup,
+            pending: Mutex::new(HashMap::new()),
+            tokens: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct RegStart {
+    id: String,
+    request: String,
+}
+#[derive(serde::Deserialize)]
+struct RegFinish {
+    id: String,
+    upload: String,
+}
+#[derive(serde::Deserialize)]
+struct LoginStart {
+    id: String,
+    request: String,
+}
+#[derive(serde::Deserialize)]
+struct LoginFinish {
+    session: String,
+    finalization: String,
+}
+
+fn random_hex() -> String {
+    use rand::RngCore;
+    let mut b = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut b);
+    hex::encode(b)
+}
+
+async fn backup_register_start(
+    State(state): State<Arc<RelayState>>,
+    Json(b): Json<RegStart>,
+) -> impl IntoResponse {
+    let Ok(req) = hex::decode(&b.request) else {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({})));
+    };
+    match keepsake_backup::server_register(&state.backup.server_setup, &req, b.id.as_bytes()) {
+        Ok(resp) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "response": hex::encode(resp) })),
+        ),
+        Err(_) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({}))),
+    }
+}
+
+async fn backup_register_finish(
+    State(state): State<Arc<RelayState>>,
+    Json(b): Json<RegFinish>,
+) -> impl IntoResponse {
+    let Ok(upload) = hex::decode(&b.upload) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    match keepsake_backup::server_register_finish(&upload) {
+        Ok(pwfile) => match state.store.put(&format!("bkpwf:{}", b.id), &pwfile) {
+            Ok(()) => StatusCode::NO_CONTENT,
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        },
+        Err(_) => StatusCode::BAD_REQUEST,
+    }
+}
+
+async fn backup_login_start(
+    State(state): State<Arc<RelayState>>,
+    Json(b): Json<LoginStart>,
+) -> impl IntoResponse {
+    let Ok(req) = hex::decode(&b.request) else {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({})));
+    };
+    let Some(pwfile) = state.store.get(&format!("bkpwf:{}", b.id)).ok().flatten() else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({})));
+    };
+    match keepsake_backup::server_login_start(
+        &state.backup.server_setup,
+        &pwfile,
+        &req,
+        b.id.as_bytes(),
+    ) {
+        Ok((sstate, resp)) => {
+            let session = random_hex();
+            state
+                .backup
+                .pending
+                .lock()
+                .unwrap()
+                .insert(session.clone(), (b.id.clone(), sstate));
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "session": session, "response": hex::encode(resp) })),
+            )
+        }
+        Err(_) => (StatusCode::UNAUTHORIZED, Json(serde_json::json!({}))),
+    }
+}
+
+async fn backup_login_finish(
+    State(state): State<Arc<RelayState>>,
+    Json(b): Json<LoginFinish>,
+) -> impl IntoResponse {
+    let pending = state.backup.pending.lock().unwrap().remove(&b.session);
+    let Some((id, sstate)) = pending else {
+        return StatusCode::UNAUTHORIZED;
+    };
+    let Ok(fin) = hex::decode(&b.finalization) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    match keepsake_backup::server_login_finish(&sstate, &fin) {
+        Ok(session_key) => {
+            state.backup.tokens.lock().unwrap().insert(id, session_key);
+            StatusCode::NO_CONTENT
+        }
+        Err(_) => StatusCode::UNAUTHORIZED,
+    }
+}
+
+fn backup_authorized(state: &RelayState, id: &str, headers: &HeaderMap) -> bool {
+    let Some(bearer) = headers.get("authorization").and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    let Some(token_hex) = bearer.strip_prefix("Bearer ") else {
+        return false;
+    };
+    let Ok(token) = hex::decode(token_hex) else {
+        return false;
+    };
+    match state.backup.tokens.lock().unwrap().get(id) {
+        Some(expected) => ct_eq(&token, expected),
+        None => false,
+    }
+}
+
+async fn backup_put(
+    State(state): State<Arc<RelayState>>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    if !backup_authorized(&state, &id, &headers) {
+        return StatusCode::UNAUTHORIZED;
+    }
+    match state.store.put(&format!("bkblob:{id}"), &body) {
+        Ok(()) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+async fn backup_get(
+    State(state): State<Arc<RelayState>>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !backup_authorized(&state, &id, &headers) {
+        return (StatusCode::UNAUTHORIZED, Vec::new());
+    }
+    match state.store.get(&format!("bkblob:{id}")) {
+        Ok(Some(b)) => (StatusCode::OK, b),
+        Ok(None) => (StatusCode::NOT_FOUND, Vec::new()),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Vec::new()),
+    }
+}
+
+/// Client for the OPAQUE backup endpoints: register a password, log in (deriving the bearer
+/// session key + the server-blind export key), and upload/download the locked blob.
+pub struct BackupRelayClient {
+    base: String,
+    http: reqwest::Client,
+}
+
+impl BackupRelayClient {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        BackupRelayClient {
+            base: base_url.into(),
+            http: reqwest::Client::new(),
+        }
+    }
+
+    async fn post_json(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, RelayError> {
+        let resp = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(RelayError::Status(resp.status().as_u16()));
+        }
+        Ok(resp
+            .json::<serde_json::Value>()
+            .await
+            .unwrap_or(serde_json::Value::Null))
+    }
+
+    async fn post_empty(&self, path: &str, body: serde_json::Value) -> Result<(), RelayError> {
+        let resp = self
+            .http
+            .post(format!("{}{path}", self.base))
+            .json(&body)
+            .send()
+            .await?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(RelayError::Status(resp.status().as_u16()))
+        }
+    }
+
+    /// Register a password for `id` (one-time). The relay stores only a blind password file.
+    pub async fn register(&self, id: &str, password: &[u8]) -> Result<(), RelayError> {
+        let (cstate, req) = keepsake_backup::client_register_start(password);
+        let resp = self
+            .post_json(
+                "/v1/backup/register/start",
+                serde_json::json!({ "id": id, "request": hex::encode(req) }),
+            )
+            .await?;
+        let response = hex::decode(resp["response"].as_str().ok_or(RelayError::Backup)?)
+            .map_err(|_| RelayError::Backup)?;
+        let (upload, _export) = keepsake_backup::client_register_finish(cstate, password, &response)?;
+        self.post_empty(
+            "/v1/backup/register/finish",
+            serde_json::json!({ "id": id, "upload": hex::encode(upload) }),
+        )
+        .await
+    }
+
+    /// Log in for `id`. Returns `(session_key, export_key)`: the session key is the bearer for blob
+    /// upload/download; the export key locks/unlocks the blob (the relay never sees it).
+    pub async fn login(&self, id: &str, password: &[u8]) -> Result<(Vec<u8>, Vec<u8>), RelayError> {
+        let (cstate, req) = keepsake_backup::client_login_start(password);
+        let start = self
+            .post_json(
+                "/v1/backup/login/start",
+                serde_json::json!({ "id": id, "request": hex::encode(req) }),
+            )
+            .await?;
+        let session = start["session"]
+            .as_str()
+            .ok_or(RelayError::Backup)?
+            .to_string();
+        let response = hex::decode(start["response"].as_str().ok_or(RelayError::Backup)?)
+            .map_err(|_| RelayError::Backup)?;
+        let (finalization, session_key, export_key) =
+            keepsake_backup::client_login_finish(cstate, password, &response)?;
+        self.post_empty(
+            "/v1/backup/login/finish",
+            serde_json::json!({ "session": session, "finalization": hex::encode(finalization) }),
+        )
+        .await?;
+        Ok((session_key, export_key))
+    }
+
+    /// Upload the locked blob for `id` (authenticated by the login `session_key`).
+    pub async fn upload(
+        &self,
+        id: &str,
+        session_key: &[u8],
+        blob: Vec<u8>,
+    ) -> Result<(), RelayError> {
+        let resp = self
+            .http
+            .put(format!("{}/v1/backup/blob/{id}", self.base))
+            .bearer_auth(hex::encode(session_key))
+            .body(blob)
+            .send()
+            .await?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(RelayError::Status(resp.status().as_u16()))
+        }
+    }
+
+    /// Download the locked blob for `id` (`None` if absent).
+    pub async fn download(
+        &self,
+        id: &str,
+        session_key: &[u8],
+    ) -> Result<Option<Vec<u8>>, RelayError> {
+        let resp = self
+            .http
+            .get(format!("{}/v1/backup/blob/{id}", self.base))
+            .bearer_auth(hex::encode(session_key))
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            return Err(RelayError::Status(resp.status().as_u16()));
+        }
+        Ok(Some(resp.bytes().await?.to_vec()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +709,34 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(b.recall(&kek, &id).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn opaque_backup_round_trips_zero_knowledge_over_http() {
+        let base = spawn_relay("t").await;
+        let client = BackupRelayClient::new(&base);
+        let id = "vault-xyz";
+        let password = b"correct horse battery staple";
+
+        // Register the password once, then log in: the session key gates blob ops, the export key
+        // (which the relay never sees) locks the blob.
+        client.register(id, password).await.unwrap();
+        let (session_key, export_key) = client.login(id, password).await.unwrap();
+
+        let secret = b"the serialized memory passport bytes";
+        let blob = keepsake_backup::lock_blob(&export_key, secret).unwrap();
+        client.upload(id, &session_key, blob).await.unwrap();
+
+        // A fresh login (another device, same password) recovers the same export key and the blob.
+        let (session_key2, export_key2) = client.login(id, password).await.unwrap();
+        let downloaded = client.download(id, &session_key2).await.unwrap().unwrap();
+        assert_eq!(
+            keepsake_backup::unlock_blob(&export_key2, &downloaded).unwrap(),
+            secret,
+            "the backup round-trips end-to-end, zero-knowledge"
+        );
+
+        // A wrong password cannot authenticate.
+        assert!(client.login(id, b"wrong password").await.is_err());
     }
 }

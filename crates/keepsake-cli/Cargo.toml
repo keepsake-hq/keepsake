@@ -18,6 +18,9 @@ keepsake-retrieval = { path = "../keepsake-retrieval" }
 keepsake-vault = { path = "../keepsake-vault" }
 keepsake-firewall = { path = "../keepsake-firewall" }
 keepsake-daemon = { path = "../keepsake-daemon" }
+keepsake-relay = { path = "../keepsake-relay" }
+keepsake-backup = { path = "../keepsake-backup" }
+sha2 = "0.10"
 clap = { version = "4", features = ["derive"] }
 bip39 = { version = "2", features = ["rand"] }
 hex = "0.4"

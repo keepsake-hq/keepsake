@@ -112,7 +112,7 @@ pub fn server_login_start(
     password_file: &[u8],
     request: &[u8],
     credential_id: &[u8],
-) -> Result<(ServerLogin<Cs>, Vec<u8>), BackupError> {
+) -> Result<(Vec<u8>, Vec<u8>), BackupError> {
     let setup =
         ServerSetup::<Cs>::deserialize(server_setup).map_err(|_| BackupError::Protocol)?;
     let password_file =
@@ -127,7 +127,9 @@ pub fn server_login_start(
         ServerLoginParameters::default(),
     )
     .map_err(|_| BackupError::Protocol)?;
-    Ok((res.state, res.message.serialize().to_vec()))
+    // The server's pending-login state is serialized so it can be parked between the two HTTP
+    // round-trips without the relay ever naming an opaque-ke type.
+    Ok((res.state.serialize().to_vec(), res.message.serialize().to_vec()))
 }
 
 /// Client step 2 — finish login. A wrong password fails here. Returns
@@ -154,11 +156,10 @@ pub fn client_login_finish(
     ))
 }
 
-/// Server step — verify the client's finalization and derive the matching session key.
-pub fn server_login_finish(
-    state: ServerLogin<Cs>,
-    finalization: &[u8],
-) -> Result<Vec<u8>, BackupError> {
+/// Server step — verify the client's finalization and derive the matching session key. `state` is
+/// the serialized pending-login state returned by [`server_login_start`].
+pub fn server_login_finish(state: &[u8], finalization: &[u8]) -> Result<Vec<u8>, BackupError> {
+    let state = ServerLogin::<Cs>::deserialize(state).map_err(|_| BackupError::Protocol)?;
     let finalization =
         CredentialFinalization::<Cs>::deserialize(finalization).map_err(|_| BackupError::Protocol)?;
     let res = state
@@ -225,7 +226,7 @@ mod tests {
         let login = client_login_finish(cstate, login_pw, &resp);
         // Drive the server side only when the client finished (a wrong password fails client-side).
         if let Ok((finalization, _client_session, login_export)) = &login {
-            let server_session = server_login_finish(sstate, finalization).unwrap();
+            let server_session = server_login_finish(&sstate, finalization).unwrap();
             assert_eq!(
                 login.as_ref().unwrap().1,
                 server_session,
