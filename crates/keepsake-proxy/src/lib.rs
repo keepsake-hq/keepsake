@@ -356,11 +356,17 @@ impl MemorySource {
         match self {
             MemorySource::Local { vault, kek } => {
                 let v = vault.lock().await;
-                Ok(v.recall(kek, query, k)
-                    .map_err(|e| format!("{e:?}"))?
-                    .into_iter()
-                    .map(|(_, text)| text)
-                    .collect())
+                Ok(v.recall_ranked(
+                    kek,
+                    query,
+                    k,
+                    now_unix() as i64,
+                    keepsake_vault::RecencyParams::default(),
+                )
+                .map_err(|e| format!("{e:?}"))?
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect())
             }
             MemorySource::Daemon(client) => {
                 let resp = with_cap(client, cap)
@@ -379,20 +385,34 @@ impl MemorySource {
         }
     }
 
-    /// Store `text` as a new memory.
-    pub async fn remember(&self, text: &str, cap: Option<&str>) -> Result<(), String> {
+    /// Store `text` as a new memory, optionally tagged with a provenance `source`
+    /// (e.g. `proxy:<model>`).
+    pub async fn remember(
+        &self,
+        text: &str,
+        cap: Option<&str>,
+        source: Option<&str>,
+    ) -> Result<(), String> {
         match self {
             MemorySource::Local { vault, kek } => {
                 let mut v = vault.lock().await;
-                v.remember_deduped(kek, text, keepsake_vault::DEDUP_THRESHOLD)
-                    .map(|_| ())
-                    .map_err(|e| format!("{e:?}"))
+                v.remember_deduped_with_source(
+                    kek,
+                    text,
+                    keepsake_vault::DEDUP_THRESHOLD,
+                    now_unix() as i64,
+                    source,
+                )
+                .map(|_| ())
+                .map_err(|e| format!("{e:?}"))
             }
             MemorySource::Daemon(client) => {
-                with_cap(client, cap)
-                    .remember(text)
-                    .await
-                    .map_err(|e| format!("daemon remember: {e}"))?;
+                let client = with_cap(client, cap);
+                let res = match source {
+                    Some(s) => client.remember_with_source(text, s).await,
+                    None => client.remember(text).await,
+                };
+                res.map_err(|e| format!("daemon remember: {e}"))?;
                 Ok(())
             }
         }
@@ -562,12 +582,13 @@ async fn chat_completions(
     if policy.write_back {
         if let Some(text) = last_user_message(&req) {
             let cap = header("x-keepsake-capability");
+            let source = format!("proxy:{}", req.model);
             if std::env::var("KEEPSAKE_AUTO_EXTRACT").is_ok() {
                 for fact in extract_facts(&state, &req.model, text).await {
-                    let _ = state.memory.remember(&fact, cap).await;
+                    let _ = state.memory.remember(&fact, cap, Some(&source)).await;
                 }
             } else {
-                let _ = state.memory.remember(text, cap).await;
+                let _ = state.memory.remember(text, cap, Some(&source)).await;
             }
         }
     }
@@ -723,7 +744,7 @@ mod tests {
             MemorySource::Daemon(keepsake_daemon::DaemonClient::new(sock.to_str().unwrap()));
         // Wait for the daemon to accept connections (first write succeeds once it is up).
         for _ in 0..60 {
-            if source.remember("kilo kilo kilo", None).await.is_ok() {
+            if source.remember("kilo kilo kilo", None, None).await.is_ok() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;

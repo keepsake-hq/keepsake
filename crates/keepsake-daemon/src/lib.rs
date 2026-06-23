@@ -12,7 +12,7 @@ use keepsake_core::CellId;
 use keepsake_crypto::Kek;
 use keepsake_firewall::capability::{Authorization, CapabilityToken};
 use keepsake_retrieval::Embedder;
-use keepsake_vault::MemoryVault;
+use keepsake_vault::{MemoryVault, RecencyParams};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
@@ -71,6 +71,7 @@ impl<E: Embedder> DaemonState<E> {
 
         match method {
             "vault/remember" => self.remember(id, &params, &caller),
+            "vault/remember_fact" => self.remember_fact(id, &params, &caller),
             "vault/recall" => self.recall(id, &params, &caller),
             "vault/forget" => self.forget(id, &params, &caller),
             "vault/status" => self.status(id, &caller),
@@ -86,13 +87,46 @@ impl<E: Embedder> DaemonState<E> {
         let Some(text) = params.get("text").and_then(Value::as_str) else {
             return rpc_error(id, -32602, "remember requires params.text (string)");
         };
+        let source = params.get("source").and_then(Value::as_str);
         let mut vault = self.vault.lock().expect("vault mutex poisoned");
-        match vault.remember_deduped(&self.kek, text, keepsake_vault::DEDUP_THRESHOLD) {
+        match vault.remember_deduped_with_source(
+            &self.kek,
+            text,
+            keepsake_vault::DEDUP_THRESHOLD,
+            unix_now() as i64,
+            source,
+        ) {
             Ok((cell_id, stored)) => rpc_ok(
                 id,
                 json!({ "cell_id": hex::encode(cell_id.as_bytes()), "stored": stored }),
             ),
             Err(e) => rpc_error(id, -32010, &format!("remember failed: {e:?}")),
+        }
+    }
+
+    /// Update a keyed fact: a changed value supersedes the prior one (hidden from recall,
+    /// not erased). Write-scoped, like `remember`.
+    fn remember_fact(&self, id: Value, params: &Value, caller: &Caller) -> Value {
+        if !caller.can_write() {
+            return rpc_error(id, -32001, "capability does not permit write");
+        }
+        let (Some(subject), Some(value)) = (
+            params.get("subject").and_then(Value::as_str),
+            params.get("value").and_then(Value::as_str),
+        ) else {
+            return rpc_error(
+                id,
+                -32602,
+                "remember_fact requires params.subject and params.value (strings)",
+            );
+        };
+        let mut vault = self.vault.lock().expect("vault mutex poisoned");
+        match vault.remember_fact(&self.kek, subject, value, unix_now() as i64) {
+            Ok((cell_id, changed)) => rpc_ok(
+                id,
+                json!({ "cell_id": hex::encode(cell_id.as_bytes()), "changed": changed }),
+            ),
+            Err(e) => rpc_error(id, -32010, &format!("remember_fact failed: {e:?}")),
         }
     }
 
@@ -106,12 +140,19 @@ impl<E: Embedder> DaemonState<E> {
         let k = params.get("k").and_then(Value::as_u64).unwrap_or(4) as usize;
         let k = caller.clamp_records(k);
         let vault = self.vault.lock().expect("vault mutex poisoned");
-        match vault.recall(&self.kek, query, k) {
+        match vault.recall_ranked(&self.kek, query, k, unix_now() as i64, RecencyParams::default()) {
             Ok(hits) => {
                 let hits: Vec<Value> = hits
                     .into_iter()
                     .filter(|(_, text)| caller.permits_topic(text))
-                    .map(|(cid, text)| json!({ "cell_id": hex::encode(cid.as_bytes()), "text": text }))
+                    .map(|(cid, text)| {
+                        let mut hit =
+                            json!({ "cell_id": hex::encode(cid.as_bytes()), "text": text });
+                        if let Ok(Some(src)) = vault.source(&cid) {
+                            hit["source"] = json!(src);
+                        }
+                        hit
+                    })
                     .collect();
                 rpc_ok(id, json!({ "hits": hits }))
             }
@@ -341,6 +382,18 @@ impl DaemonClient {
         self.call("vault/remember", json!({ "text": text })).await
     }
 
+    /// Remember `text` tagged with a provenance `source` (e.g. `proxy:openai:gpt-4`).
+    pub async fn remember_with_source(&self, text: &str, source: &str) -> std::io::Result<Value> {
+        self.call("vault/remember", json!({ "text": text, "source": source }))
+            .await
+    }
+
+    /// Update a keyed fact; a changed value supersedes the prior one over the shared hub.
+    pub async fn remember_fact(&self, subject: &str, value: &str) -> std::io::Result<Value> {
+        self.call("vault/remember_fact", json!({ "subject": subject, "value": value }))
+            .await
+    }
+
     pub async fn recall(&self, query: &str, k: usize) -> std::io::Result<Value> {
         self.call("vault/recall", json!({ "query": query, "k": k })).await
     }
@@ -488,6 +541,51 @@ mod tests {
             .recall(&kek, "mike mike mike", 1)
             .unwrap();
         assert_eq!(hits[0].1, "mike mike mike");
+    }
+
+    #[test]
+    fn daemon_recall_carries_provenance_source() {
+        let (state, _) = test_state();
+        state.handle(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "vault/remember",
+            "params": { "text": "sierra sierra sierra", "source": "mcp:claude" }
+        }));
+        let r = state.handle(&recall_req("sierra sierra sierra", 1, None));
+        let hits = r["result"]["hits"].as_array().expect("hits array");
+        assert_eq!(
+            hits[0]["source"], "mcp:claude",
+            "recall over the hub carries provenance: {r}"
+        );
+    }
+
+    #[test]
+    fn daemon_remember_fact_supersedes_over_the_hub() {
+        let (state, _) = test_state();
+        state.handle(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "vault/remember_fact",
+            "params": { "subject": "language", "value": "I code in Python" }
+        }));
+        let r = state.handle(&json!({
+            "jsonrpc": "2.0", "id": 2, "method": "vault/remember_fact",
+            "params": { "subject": "language", "value": "I switched to Rust" }
+        }));
+        assert_eq!(r["result"]["changed"], true, "a changed value supersedes: {r}");
+
+        let r = state.handle(&recall_req("I code in Python switched Rust language", 5, None));
+        let texts: Vec<String> = r["result"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["text"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("Rust")),
+            "the current fact surfaces: {r}"
+        );
+        assert!(
+            !texts.iter().any(|t| t.contains("Python")),
+            "the superseded fact is hidden over the hub: {r}"
+        );
     }
 
     #[test]

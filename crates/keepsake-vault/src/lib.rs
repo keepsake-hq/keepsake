@@ -141,6 +141,20 @@ impl<E: Embedder> MemoryVault<E> {
         text: &str,
         threshold: f32,
     ) -> Result<(CellId, bool), StoreError> {
+        self.remember_deduped_with_source(kek, text, threshold, now_unix(), None)
+    }
+
+    /// Like [`MemoryVault::remember_deduped`] but stamps an explicit creation time and an
+    /// optional provenance `source` on a newly-stored memory (skipped writes keep the
+    /// existing cell untouched).
+    pub fn remember_deduped_with_source(
+        &mut self,
+        kek: &Kek,
+        text: &str,
+        threshold: f32,
+        created_at: i64,
+        source: Option<&str>,
+    ) -> Result<(CellId, bool), StoreError> {
         let vector = self
             .embedder
             .embed(text)
@@ -150,7 +164,9 @@ impl<E: Embedder> MemoryVault<E> {
                 return Ok((existing, false));
             }
         }
-        let id = self.store.remember(kek, text.as_bytes())?;
+        let id = self
+            .store
+            .remember_with_source(kek, text.as_bytes(), created_at, source)?;
         self.index.add(id.clone(), &vector);
         Ok((id, true))
     }
@@ -432,6 +448,14 @@ impl<E: Embedder> MemoryVault<E> {
         self.superseded = self.store.superseded_ids()?.into_iter().collect();
         Ok(())
     }
+}
+
+/// Current wall-clock time in Unix seconds (0 if the clock predates the epoch).
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
