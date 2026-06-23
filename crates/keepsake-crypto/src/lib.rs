@@ -102,6 +102,27 @@ impl RootKeys {
             .expect("32 bytes is a valid HKDF-SHA256 output length");
         k
     }
+
+    /// A public, unguessable per-vault **sync slot** id — where this vault's encrypted snapshots
+    /// live on a relay. Derived from `device_root`, so every device with the seed computes the same
+    /// slot while two different seeds never collide (a 256-bit secret address). Hex-encode for use.
+    pub fn sync_slot(&self) -> [u8; 32] {
+        let hk = Hkdf::<Sha256>::new(None, &self.device_root);
+        let mut k = [0u8; 32];
+        hk.expand(b"keepsake/v1/sync-slot", &mut k)
+            .expect("32 bytes is a valid HKDF-SHA256 output length");
+        k
+    }
+
+    /// A secret **write token** authorizing writes to this vault's sync slot — so a relay (or
+    /// anyone who learns the slot) cannot overwrite it without the seed. Derived from `device_root`.
+    pub fn sync_write_token(&self) -> [u8; 32] {
+        let hk = Hkdf::<Sha256>::new(None, &self.device_root);
+        let mut k = [0u8; 32];
+        hk.expand(b"keepsake/v1/sync-write-token", &mut k)
+            .expect("32 bytes is a valid HKDF-SHA256 output length");
+        k
+    }
 }
 
 /// Key-encryption-key (KEK): wraps per-cell DEKs. Derived from `encryption_root`.
@@ -726,6 +747,22 @@ mod tests {
         assert!(RootKeys::from_mnemonic(&phrase, "").is_ok());
         // Fresh entropy each call (collision is astronomically unlikely).
         assert_ne!(phrase, generate_mnemonic(), "each seed is freshly random");
+    }
+
+    #[test]
+    fn sync_slot_and_write_token_are_deterministic_and_separated() {
+        let a = RootKeys::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+        let a2 = RootKeys::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+        // Deterministic: every device holding the seed computes the same slot + token.
+        assert_eq!(a.sync_slot(), a2.sync_slot());
+        assert_eq!(a.sync_write_token(), a2.sync_write_token());
+        // Domain-separated from each other and from the snapshot MAC key.
+        assert_ne!(a.sync_slot(), a.sync_write_token());
+        assert_ne!(a.sync_slot(), a.sync_mac_key());
+        assert_ne!(a.sync_write_token(), a.sync_mac_key());
+        // A different seed (here via a passphrase) yields a different slot — users never collide.
+        let b = RootKeys::from_mnemonic(TEST_MNEMONIC, "another").unwrap();
+        assert_ne!(a.sync_slot(), b.sync_slot());
     }
 
     #[test]

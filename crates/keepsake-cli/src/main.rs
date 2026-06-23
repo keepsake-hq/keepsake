@@ -62,6 +62,9 @@ enum Cmd {
     Backup { url: String },
     /// Restore your vault from such a backup (merges into the local vault).
     Restore { url: String },
+    /// Sync this vault with a relay (your devices share one memory). Uses your seed-derived slot +
+    /// write-token; the relay only ever sees encrypted snapshots. Run on a timer/cron, or manually.
+    Sync { url: String },
     /// Social recovery: split or recombine the seed into Shamir shares.
     #[command(subcommand)]
     Recovery(RecoveryCmd),
@@ -270,6 +273,26 @@ fn main() {
                 vault.import_passport(&kek, &passport).expect("import passport")
             });
             println!("restored {n} records from backup.");
+        }
+        Cmd::Sync { url } => {
+            let mnemonic = std::env::var("KEEPSAKE_MNEMONIC").expect("set KEEPSAKE_MNEMONIC");
+            let roots = RootKeys::from_mnemonic(&mnemonic, "").expect("valid BIP-39 mnemonic");
+            let store = SqliteVault::open(&db_path(), &roots.db_key()).expect("open vault");
+            let slot = hex::encode(roots.sync_slot());
+            let write_token = roots.sync_write_token();
+            let sync_key = roots.sync_mac_key();
+            let pulled = run_async(async move {
+                let client = keepsake_relay::RelayClient::new(&url, "");
+                // Pull remote changes first (merge them in), then push our merged state back.
+                let pulled = keepsake_relay::pull_and_apply_owned(&client, &slot, &store, &sync_key)
+                    .await
+                    .expect("pull from relay");
+                keepsake_relay::push_snapshot_owned(&client, &slot, &write_token, &store, &sync_key)
+                    .await
+                    .expect("push to relay");
+                pulled
+            });
+            println!("synced (remote changes applied: {pulled}). The relay sees only ciphertext.");
         }
         Cmd::Recovery(action) => match action {
             RecoveryCmd::Split { threshold, shares } => {

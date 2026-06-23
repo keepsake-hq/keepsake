@@ -75,9 +75,12 @@ impl BlobStore {
              CREATE TABLE IF NOT EXISTS slots (
                  slot       TEXT PRIMARY KEY,
                  blob       BLOB NOT NULL,
-                 updated_at INTEGER NOT NULL
+                 updated_at INTEGER NOT NULL,
+                 write_auth BLOB
              );",
         )?;
+        // Back-fill per-slot ownership on relays created before write_auth existed.
+        let _ = conn.execute("ALTER TABLE slots ADD COLUMN write_auth BLOB", []);
         Ok(BlobStore {
             conn: Mutex::new(conn),
         })
@@ -105,6 +108,39 @@ impl BlobStore {
             )
             .optional()
     }
+
+    /// Store `blob` at `slot`, authorized by `write_token` (trust-on-first-use): the first write
+    /// claims the slot by recording `sha256(write_token)`; later writes must present the same token.
+    /// Returns `false` (changing nothing) if the token does not match the slot's owner. This is
+    /// what makes one relay safe for many users — each owns only their own unguessable slot.
+    pub fn put_authorized(
+        &self,
+        slot: &str,
+        blob: &[u8],
+        write_token: &[u8],
+    ) -> Result<bool, rusqlite::Error> {
+        let provided = sha256(write_token);
+        let conn = self.conn.lock().unwrap();
+        let existing: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT write_auth FROM slots WHERE slot = ?1",
+                params![slot],
+                |r| r.get::<_, Option<Vec<u8>>>(0),
+            )
+            .optional()?
+            .flatten();
+        if let Some(owner) = existing {
+            if !ct_eq(&owner, &provided) {
+                return Ok(false);
+            }
+        }
+        conn.execute(
+            "INSERT INTO slots (slot, blob, updated_at, write_auth) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(slot) DO UPDATE SET blob = excluded.blob, updated_at = excluded.updated_at",
+            params![slot, blob, now_unix(), provided],
+        )?;
+        Ok(true)
+    }
 }
 
 fn now_unix() -> i64 {
@@ -112,6 +148,13 @@ fn now_unix() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn sha256(data: &[u8]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(data);
+    h.finalize().to_vec()
 }
 
 // ---- server ----
@@ -132,6 +175,7 @@ pub fn app(token: String, store: BlobStore) -> Router {
     });
     Router::new()
         .route("/v1/blob/{slot}", put(put_blob).get(get_blob))
+        .route("/v1/sync/{slot}", put(put_owned).get(get_owned))
         .route("/v1/backup/register/start", post(backup_register_start))
         .route("/v1/backup/register/finish", post(backup_register_finish))
         .route("/v1/backup/login/start", post(backup_login_start))
@@ -203,6 +247,45 @@ async fn get_blob(
     }
 }
 
+// ---- multi-tenant sync: one relay, many users; each owns only their own unguessable slot ----
+
+/// Write to an owned slot, authorized by the seed-derived write token (trust-on-first-use).
+/// No global bearer — the slot is a 256-bit secret and only its owner's token may write it.
+async fn put_owned(
+    State(state): State<Arc<RelayState>>,
+    AxumPath(slot): AxumPath<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let Some(token_hex) = headers
+        .get("x-keepsake-write-token")
+        .and_then(|v| v.to_str().ok())
+    else {
+        return StatusCode::UNAUTHORIZED;
+    };
+    let Ok(token) = hex::decode(token_hex) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    match state.store.put_authorized(&slot, &body, &token) {
+        Ok(true) => StatusCode::NO_CONTENT,
+        Ok(false) => StatusCode::FORBIDDEN, // a different owner already claimed this slot
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// Read an owned slot. Open: knowing the (secret, unguessable) slot is the read capability, and
+/// the blob is end-to-end encrypted anyway.
+async fn get_owned(
+    State(state): State<Arc<RelayState>>,
+    AxumPath(slot): AxumPath<String>,
+) -> impl IntoResponse {
+    match state.store.get(&slot) {
+        Ok(Some(blob)) => (StatusCode::OK, blob),
+        Ok(None) => (StatusCode::NOT_FOUND, Vec::new()),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Vec::new()),
+    }
+}
+
 // ---- client ----
 
 /// HTTP client for the relay.
@@ -260,6 +343,49 @@ impl RelayClient {
         }
         Ok(Some(resp.bytes().await?.to_vec()))
     }
+
+    /// Push to an owned multi-tenant slot, authorized by the seed-derived `write_token`.
+    pub async fn push_owned(
+        &self,
+        slot: &str,
+        write_token: &[u8],
+        blob: Vec<u8>,
+    ) -> Result<(), RelayError> {
+        let resp = self
+            .http
+            .put(format!("{}/v1/sync/{slot}", self.base))
+            .header("x-keepsake-write-token", hex::encode(write_token))
+            .body(blob)
+            .send()
+            .await?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(RelayError::Status(resp.status().as_u16()))
+        }
+    }
+
+    /// Pull an owned multi-tenant slot (`None` if absent). No auth — the slot is the capability.
+    pub async fn pull_owned(&self, slot: &str) -> Result<Option<Vec<u8>>, RelayError> {
+        let resp = self
+            .http
+            .get(format!("{}/v1/sync/{slot}", self.base))
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            return Err(RelayError::Status(resp.status().as_u16()));
+        }
+        if resp
+            .content_length()
+            .is_some_and(|len| len > keepsake_sync::MAX_SNAPSHOT_BYTES as u64)
+        {
+            return Err(RelayError::Status(413));
+        }
+        Ok(Some(resp.bytes().await?.to_vec()))
+    }
 }
 
 /// Snapshot a vault and push it to `slot`.
@@ -282,6 +408,35 @@ pub async fn pull_and_apply(
     sync_key: &[u8; 32],
 ) -> Result<bool, RelayError> {
     match client.pull(slot).await? {
+        Some(bytes) => match SyncState::open(&bytes, sync_key) {
+            Some(state) => Ok(state.apply_to(vault, slot)?),
+            None => Ok(false),
+        },
+        None => Ok(false),
+    }
+}
+
+/// Snapshot a vault and push it to the owner's multi-tenant `slot`, authorized by `write_token`.
+pub async fn push_snapshot_owned(
+    client: &RelayClient,
+    slot: &str,
+    write_token: &[u8],
+    vault: &SqliteVault,
+    sync_key: &[u8; 32],
+) -> Result<(), RelayError> {
+    client
+        .push_owned(slot, write_token, SyncState::from_vault(vault)?.seal(sync_key))
+        .await
+}
+
+/// Pull the owner's `slot` and merge it into a vault. Returns `true` if a snapshot was applied.
+pub async fn pull_and_apply_owned(
+    client: &RelayClient,
+    slot: &str,
+    vault: &SqliteVault,
+    sync_key: &[u8; 32],
+) -> Result<bool, RelayError> {
+    match client.pull_owned(slot).await? {
         Some(bytes) => match SyncState::open(&bytes, sync_key) {
             Some(state) => Ok(state.apply_to(vault, slot)?),
             None => Ok(false),
@@ -657,6 +812,71 @@ mod tests {
             Some(&b"newer snapshot"[..])
         );
         assert_eq!(store.get("missing").unwrap(), None);
+    }
+
+    #[test]
+    fn put_authorized_is_trust_on_first_use() {
+        let store = BlobStore::open_in_memory().unwrap();
+        let owner = b"owner-write-token";
+        let attacker = b"someone-elses-token";
+
+        // First write claims the slot.
+        assert!(store.put_authorized("slot-x", b"v1", owner).unwrap());
+        assert_eq!(store.get("slot-x").unwrap().as_deref(), Some(&b"v1"[..]));
+
+        // The owner (same token) may overwrite.
+        assert!(store.put_authorized("slot-x", b"v2", owner).unwrap());
+        assert_eq!(store.get("slot-x").unwrap().as_deref(), Some(&b"v2"[..]));
+
+        // A different token cannot overwrite a claimed slot.
+        assert!(!store.put_authorized("slot-x", b"evil", attacker).unwrap());
+        assert_eq!(
+            store.get("slot-x").unwrap().as_deref(),
+            Some(&b"v2"[..]),
+            "the blob is unchanged after a rejected write"
+        );
+
+        // A different slot is independent — the attacker can claim their own.
+        assert!(store.put_authorized("slot-y", b"theirs", attacker).unwrap());
+    }
+
+    #[tokio::test]
+    async fn owned_sync_is_isolated_per_write_token_over_http() {
+        let base = spawn_relay("t").await;
+        let client = RelayClient::new(&base, "unused-for-sync");
+        let (alice_slot, alice_tok) = ("alice-slot", b"alice-token".as_slice());
+        let (bob_slot, bob_tok) = ("bob-slot", b"bob-token".as_slice());
+
+        // Alice claims her slot and writes; she can read it back.
+        client
+            .push_owned(alice_slot, alice_tok, b"alice v1".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            client.pull_owned(alice_slot).await.unwrap(),
+            Some(b"alice v1".to_vec())
+        );
+
+        // Bob cannot overwrite Alice's slot with his token.
+        assert!(matches!(
+            client.push_owned(alice_slot, bob_tok, b"hijack".to_vec()).await,
+            Err(RelayError::Status(403))
+        ));
+        assert_eq!(
+            client.pull_owned(alice_slot).await.unwrap(),
+            Some(b"alice v1".to_vec()),
+            "Alice's blob is unchanged after Bob's rejected write"
+        );
+
+        // Bob owns his own independent slot.
+        client
+            .push_owned(bob_slot, bob_tok, b"bob v1".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            client.pull_owned(bob_slot).await.unwrap(),
+            Some(b"bob v1".to_vec())
+        );
     }
 
     #[tokio::test]
