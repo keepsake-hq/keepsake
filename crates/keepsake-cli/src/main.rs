@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use keepsake_core::CellId;
 use keepsake_crypto::{Kek, RootKeys};
+use keepsake_firewall::capability::{CapabilityToken, Caveat};
 use keepsake_retrieval::FastEmbedder;
 use keepsake_store_sqlite::SqliteVault;
 use keepsake_vault::MemoryVault;
@@ -36,6 +37,22 @@ enum Cmd {
     Forget { cell_id: String },
     /// Show vault status.
     Status,
+    /// Run the shared memory hub (daemon) so every agent connects to ONE live vault.
+    Serve,
+    /// Mint a scoped capability token for an agent (a limited pass — never your seed).
+    Token {
+        /// Read-only (recall). Default (no flag) = full access.
+        #[arg(long)]
+        read: bool,
+        /// Write-only (remember). Default (no flag) = full access.
+        #[arg(long)]
+        write: bool,
+        /// Expiry as a unix timestamp (token stops working after it).
+        #[arg(long)]
+        expires: Option<u64>,
+    },
+    /// Print a ready-to-paste MCP config (hub socket + a fresh token) for Claude/Cursor/Codex.
+    McpConfig,
     /// Social recovery: split or recombine the seed into Shamir shares.
     #[command(subcommand)]
     Recovery(RecoveryCmd),
@@ -155,6 +172,34 @@ fn main() {
             println!("profile:  SAIHM Cell-/Tool-compatible, local receipt profile");
             println!("memories: {}", vault.count().expect("count"));
         }
+        Cmd::Serve => {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime")
+                .block_on(serve_daemon());
+        }
+        Cmd::Token {
+            read,
+            write,
+            expires,
+        } => {
+            println!("{}", build_token(&cap_root(), read, write, expires));
+            eprintln!(
+                "\nGive this to an agent as KEEPSAKE_CAPABILITY — a scoped pass, never your seed."
+            );
+        }
+        Cmd::McpConfig => {
+            // A full-access token for your OWN agent on your OWN machine.
+            let token = build_token(&cap_root(), false, false, None);
+            println!(
+                "{}",
+                mcp_config_json(&socket_path().to_string_lossy(), &token)
+            );
+            eprintln!(
+                "\nStart the hub first:  keepsake serve\nThen paste the JSON above into your MCP client's config (e.g. Claude Desktop)."
+            );
+        }
         Cmd::Recovery(action) => match action {
             RecoveryCmd::Split { threshold, shares } => {
                 let mnemonic = std::env::var("KEEPSAKE_MNEMONIC").expect("set KEEPSAKE_MNEMONIC");
@@ -249,5 +294,143 @@ fn main() {
                 let _ = std::fs::remove_file(pairing_file());
             }
         },
+    }
+}
+
+/// The hub's socket path: `KEEPSAKE_SOCKET` or `~/.keepsake/daemon.sock`.
+fn socket_path() -> PathBuf {
+    if let Ok(p) = std::env::var("KEEPSAKE_SOCKET") {
+        return PathBuf::from(p);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".keepsake").join("daemon.sock")
+}
+
+/// The capability root derived from the seed — used to mint/verify capability tokens.
+fn cap_root() -> [u8; 32] {
+    let mnemonic = std::env::var("KEEPSAKE_MNEMONIC").expect("set KEEPSAKE_MNEMONIC");
+    RootKeys::from_mnemonic(&mnemonic, "")
+        .expect("valid BIP-39 mnemonic")
+        .capability_root()
+}
+
+/// Mint a capability token: `read` only → recall, `write` only → remember, neither → full
+/// access (recall + remember + admin). `expires` adds a unix-timestamp expiry.
+fn build_token(cap_root: &[u8; 32], read: bool, write: bool, expires: Option<u64>) -> String {
+    let capability = if read && !write {
+        "memory:read"
+    } else if write && !read {
+        "memory:write"
+    } else {
+        "memory:admin"
+    };
+    let mut caveats = vec![Caveat::new("capability", capability)];
+    if let Some(e) = expires {
+        caveats.push(Caveat::new("expires", &e.to_string()));
+    }
+    CapabilityToken::issue(cap_root, caveats).encode_hex()
+}
+
+/// A ready-to-paste MCP server config wiring the keepsake MCP shim to the hub `socket` with a
+/// scoped `token` — so an agent connects to the shared vault without ever seeing the seed.
+fn mcp_config_json(socket: &str, token: &str) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "mcpServers": {
+            "keepsake": {
+                "command": "keepsake-mcp",
+                "env": {
+                    "KEEPSAKE_SOCKET": socket,
+                    "KEEPSAKE_CAPABILITY": token
+                }
+            }
+        }
+    }))
+    .expect("serialize MCP config")
+}
+
+/// Unlock the vault from the seed and run the shared hub over its Unix socket.
+async fn serve_daemon() {
+    let mnemonic =
+        std::env::var("KEEPSAKE_MNEMONIC").expect("set KEEPSAKE_MNEMONIC (run `keepsake init`)");
+    let roots = RootKeys::from_mnemonic(&mnemonic, "").expect("valid BIP-39 mnemonic");
+    let kek = Kek::from_root(&roots.encryption_root);
+    let store = SqliteVault::open(&db_path(), &roots.db_key()).expect("open vault");
+    let embedder = match std::env::var("KEEPSAKE_EMBED").as_deref() {
+        Ok("bge") => FastEmbedder::bge_small(),
+        _ => FastEmbedder::nomic(),
+    }
+    .expect("load local embedding model");
+    let mut vault = MemoryVault::new(store, embedder);
+    vault.rebuild_index(&kek).expect("rebuild index");
+
+    let state =
+        std::sync::Arc::new(keepsake_daemon::DaemonState::new(vault, kek, roots.capability_root()));
+    let sock = socket_path();
+    if let Some(parent) = sock.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    eprintln!("keepsake hub listening on {}", sock.display());
+    keepsake_daemon::serve(state, &sock)
+        .await
+        .expect("hub server error");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+
+    fn root() -> [u8; 32] {
+        RootKeys::from_mnemonic(TEST_MNEMONIC, "")
+            .unwrap()
+            .capability_root()
+    }
+
+    fn authz(token: &str, r: &[u8; 32]) -> keepsake_firewall::capability::Authorization {
+        CapabilityToken::decode_hex(token).unwrap().authorize(r).unwrap()
+    }
+
+    #[test]
+    fn token_default_is_full_access() {
+        let r = root();
+        let a = authz(&build_token(&r, false, false, None), &r);
+        assert!(a.allows_read() && a.allows_write() && a.allows_admin());
+    }
+
+    #[test]
+    fn token_read_flag_is_read_only() {
+        let r = root();
+        let a = authz(&build_token(&r, true, false, None), &r);
+        assert!(a.allows_read() && !a.allows_write());
+    }
+
+    #[test]
+    fn token_write_flag_is_write_only() {
+        let r = root();
+        let a = authz(&build_token(&r, false, true, None), &r);
+        assert!(!a.allows_read() && a.allows_write());
+    }
+
+    #[test]
+    fn token_expiry_is_enforced() {
+        let r = root();
+        let a = authz(&build_token(&r, true, false, Some(100)), &r);
+        assert!(!a.is_expired(50) && a.is_expired(200));
+    }
+
+    #[test]
+    fn mcp_config_wires_socket_and_token() {
+        let json = mcp_config_json("/home/x/.keepsake/daemon.sock", "deadbeef");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["mcpServers"]["keepsake"]["command"], "keepsake-mcp");
+        assert_eq!(
+            v["mcpServers"]["keepsake"]["env"]["KEEPSAKE_SOCKET"],
+            "/home/x/.keepsake/daemon.sock"
+        );
+        assert_eq!(
+            v["mcpServers"]["keepsake"]["env"]["KEEPSAKE_CAPABILITY"],
+            "deadbeef"
+        );
     }
 }
