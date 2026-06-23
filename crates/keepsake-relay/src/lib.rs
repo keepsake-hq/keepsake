@@ -199,6 +199,19 @@ pub async fn serve(
     axum::serve(listener, app(token, store)).await
 }
 
+/// Bind a relay on an ephemeral localhost port with an in-memory store and serve it in the
+/// background. Returns the base URL (e.g. `http://127.0.0.1:54321`). For tests and local runs.
+pub async fn serve_ephemeral(token: &str) -> std::io::Result<String> {
+    let store = BlobStore::open_in_memory().map_err(std::io::Error::other)?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let base = format!("http://{}", listener.local_addr()?);
+    let router = app(token.to_string(), store);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    Ok(base)
+}
+
 fn authorized(headers: &HeaderMap, token: &str) -> bool {
     match headers.get("authorization").and_then(|v| v.to_str().ok()) {
         Some(bearer) => ct_eq(bearer.as_bytes(), format!("Bearer {token}").as_bytes()),

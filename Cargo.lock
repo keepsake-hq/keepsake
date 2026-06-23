@@ -1911,8 +1911,10 @@ dependencies = [
  "keepsake-core",
  "keepsake-crypto",
  "keepsake-firewall",
+ "keepsake-relay",
  "keepsake-retrieval",
  "keepsake-store-sqlite",
+ "keepsake-sync",
  "keepsake-vault",
  "serde_json",
  "tempfile",
@@ -1930,6 +1932,8 @@ dependencies = [
  "keepsake-store-sqlite",
  "keepsake-vault",
  "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

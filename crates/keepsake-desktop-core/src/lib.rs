@@ -7,7 +7,84 @@ use keepsake_crypto::Kek;
 use keepsake_retrieval::Embedder;
 use keepsake_store_sqlite::StoreError;
 use keepsake_vault::{MemoryVault, RecencyParams};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+/// Where the vault auto-syncs. Local-first by default (`Off`); sync is opt-in.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum SyncConfig {
+    /// No sync — the vault stays only on this device.
+    #[default]
+    Off,
+    /// The anonymous, blind hosted relay (sees only ciphertext).
+    Hosted,
+    /// A relay the user runs themselves.
+    Own { url: String },
+}
+
+/// The hosted relay endpoint (anonymous, Cloudflare-fronted; the origin server stays hidden).
+pub const HOSTED_RELAY_URL: &str = "https://sync.keepsake.app";
+
+impl SyncConfig {
+    /// The relay URL to sync with, or `None` if syncing is off or the custom URL is blank.
+    pub fn resolve_url(&self) -> Option<String> {
+        match self {
+            SyncConfig::Off => None,
+            SyncConfig::Hosted => Some(HOSTED_RELAY_URL.to_string()),
+            SyncConfig::Own { url } if !url.trim().is_empty() => Some(url.trim().to_string()),
+            SyncConfig::Own { .. } => None,
+        }
+    }
+
+    /// Load from a JSON file; missing, unreadable or corrupt → the default (`Off`).
+    pub fn load(path: &std::path::Path) -> SyncConfig {
+        std::fs::read(path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    /// Persist as JSON, creating parent directories as needed.
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
+        std::fs::write(path, json)
+    }
+}
+
+#[cfg(test)]
+mod sync_config_tests {
+    use super::{SyncConfig, HOSTED_RELAY_URL};
+
+    #[test]
+    fn resolves_each_mode_and_roundtrips_on_disk() {
+        assert_eq!(SyncConfig::Off.resolve_url(), None);
+        assert_eq!(
+            SyncConfig::Hosted.resolve_url().as_deref(),
+            Some(HOSTED_RELAY_URL)
+        );
+        assert_eq!(
+            SyncConfig::Own {
+                url: "https://r.example".into()
+            }
+            .resolve_url()
+            .as_deref(),
+            Some("https://r.example")
+        );
+        assert_eq!(SyncConfig::Own { url: "   ".into() }.resolve_url(), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sync.json");
+        assert_eq!(SyncConfig::load(&path), SyncConfig::Off); // missing → default
+        let cfg = SyncConfig::Own {
+            url: "https://r.example".into(),
+        };
+        cfg.save(&path).unwrap();
+        assert_eq!(SyncConfig::load(&path), cfg);
+    }
+}
 
 /// One recalled memory, ready to send to the frontend.
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]

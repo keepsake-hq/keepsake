@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use keepsake_core::CellId;
 use keepsake_crypto::{Kek, RootKeys};
-use keepsake_daemon::DaemonState;
+use keepsake_daemon::{run_sync_loop, DaemonState};
 use keepsake_desktop_core::{MemoryHit, RecentMemory, VaultStatus};
 use keepsake_retrieval::FastEmbedder;
 use keepsake_store_sqlite::SqliteVault;
@@ -24,10 +24,22 @@ type SharedVault = Arc<Mutex<MemoryVault<FastEmbedder>>>;
 
 /// The unlocked session: the shared vault (also served to agents by the hosted daemon), its
 /// KEK, and the running daemon task (aborted on lock so the vault stops being served).
+/// The seed-derived sync identity + daemon state, kept so the auto-sync task can be (re)started
+/// when the sync setting changes, without re-entering the seed.
+#[derive(Clone)]
+struct SyncCtx {
+    state: Arc<DaemonState<FastEmbedder>>,
+    slot: String,
+    write_token: [u8; 32],
+    sync_key: [u8; 32],
+}
+
 struct Session {
     vault: SharedVault,
     kek: Kek,
     daemon: tauri::async_runtime::JoinHandle<()>,
+    sync_ctx: SyncCtx,
+    sync: Option<tauri::async_runtime::JoinHandle<()>>,
 }
 
 /// Session state: `None` while locked, `Some` once a seed has been entered.
@@ -48,6 +60,30 @@ fn vault_db_path() -> std::path::PathBuf {
 /// Where the hosted hub listens; agents point `KEEPSAKE_SOCKET` here.
 fn socket_path() -> std::path::PathBuf {
     keepsake_dir().join("daemon.sock")
+}
+
+/// Where the sync-server choice is persisted.
+fn sync_config_path() -> std::path::PathBuf {
+    keepsake_dir().join("sync.json")
+}
+
+/// How often the background task reconciles the vault with the relay.
+const SYNC_PERIOD: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// (Re)start the auto-sync task for `ctx` per `cfg`. Returns the task handle, or `None` if off.
+fn start_sync(
+    ctx: &SyncCtx,
+    cfg: &keepsake_desktop_core::SyncConfig,
+) -> Option<tauri::async_runtime::JoinHandle<()>> {
+    let url = cfg.resolve_url()?;
+    Some(tauri::async_runtime::spawn(run_sync_loop(
+        Arc::clone(&ctx.state),
+        url,
+        ctx.slot.clone(),
+        ctx.write_token,
+        ctx.sync_key,
+        SYNC_PERIOD,
+    )))
 }
 
 /// Current wall-clock time in Unix seconds (0 if the clock predates the epoch).
@@ -174,12 +210,25 @@ fn unlock(
         Kek::from_root(&roots.encryption_root),
         roots.capability_root(),
     ));
+    // Keep the seed-derived sync identity + daemon state so auto-sync can (re)start on demand.
+    let sync_ctx = SyncCtx {
+        state: Arc::clone(&daemon_state),
+        slot: hex::encode(roots.sync_slot()),
+        write_token: roots.sync_write_token(),
+        sync_key: roots.sync_mac_key(),
+    };
     let serve_socket = socket.clone();
     let daemon = tauri::async_runtime::spawn(async move {
         if let Err(e) = keepsake_daemon::serve(daemon_state, &serve_socket).await {
             log::error!("keepsake-daemon stopped: {e}");
         }
     });
+
+    // Start always-on auto-sync per the saved setting (off / local-first by default).
+    let sync = start_sync(
+        &sync_ctx,
+        &keepsake_desktop_core::SyncConfig::load(&sync_config_path()),
+    );
 
     let status = {
         let v = shared.lock().map_err(|_| "vault poisoned".to_string())?;
@@ -189,6 +238,8 @@ fn unlock(
         vault: shared,
         kek,
         daemon,
+        sync_ctx,
+        sync,
     });
     Ok(status)
 }
@@ -198,8 +249,34 @@ fn lock(state: State<AppState>) {
     if let Some(session) = state.0.lock().unwrap().take() {
         // Stop serving the now-relocked vault; dropping the session drops the vault.
         session.daemon.abort();
+        if let Some(sync) = session.sync {
+            sync.abort();
+        }
     }
     let _ = std::fs::remove_file(socket_path());
+}
+
+#[tauri::command]
+fn get_sync_config() -> keepsake_desktop_core::SyncConfig {
+    keepsake_desktop_core::SyncConfig::load(&sync_config_path())
+}
+
+#[tauri::command]
+fn set_sync_config(
+    state: State<AppState>,
+    config: keepsake_desktop_core::SyncConfig,
+) -> Result<(), String> {
+    config
+        .save(&sync_config_path())
+        .map_err(|e| format!("could not save sync setting: {e}"))?;
+    // Apply live: if unlocked, restart the auto-sync task with the new setting.
+    if let Some(session) = state.0.lock().unwrap().as_mut() {
+        if let Some(old) = session.sync.take() {
+            old.abort();
+        }
+        session.sync = start_sync(&session.sync_ctx, &config);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -325,7 +402,9 @@ pub fn run() {
             forget,
             status,
             check_update,
-            install_update
+            install_update,
+            get_sync_config,
+            set_sync_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

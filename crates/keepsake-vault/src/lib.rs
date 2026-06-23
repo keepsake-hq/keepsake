@@ -125,6 +125,11 @@ impl<E: Embedder> MemoryVault<E> {
         }
     }
 
+    /// Borrow the underlying durable store — used by the sync layer to snapshot and merge records.
+    pub fn store(&self) -> &SqliteVault {
+        &self.store
+    }
+
     /// Store `text` as an encrypted cell and index its embedding. Returns the id.
     pub fn remember(&mut self, kek: &Kek, text: &str) -> Result<CellId, StoreError> {
         let id = self.store.remember(kek, text.as_bytes())?;

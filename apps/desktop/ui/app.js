@@ -378,6 +378,80 @@ function enterShell() {
   show("shell-only"); // any non-auth id hides auth + shows shell
   navTo("start");
   refresh();
+  loadSyncConfig();
+}
+
+// ---------- sync server setting ----------
+function paintSyncOptions(mode) {
+  $$(".sync-opt").forEach((b) => {
+    const active = b.dataset.sync === mode;
+    b.classList.toggle("border-brand-500", active);
+    b.classList.toggle("bg-brand-50", active);
+    b.classList.toggle("text-brand-700", active);
+    b.classList.toggle("border-neutral-200", !active);
+    b.classList.toggle("text-neutral-600", !active);
+  });
+  $("#sync-own-row").classList.toggle("hidden", mode !== "own");
+}
+
+function setSyncStatus(mode) {
+  const el = $("#sync-status");
+  if (!el) return;
+  el.textContent =
+    mode === "hosted"
+      ? "On — syncing through the hosted blind relay (it sees only ciphertext)."
+      : mode === "own"
+        ? "On — syncing through your own relay."
+        : "Off — your memory stays only on this device.";
+}
+
+async function loadSyncConfig() {
+  if (DEMO) {
+    paintSyncOptions("off");
+    setSyncStatus("off");
+    return;
+  }
+  let cfg;
+  try {
+    cfg = await invoke("get_sync_config");
+  } catch (_) {
+    cfg = { mode: "off" };
+  }
+  if (cfg.mode === "own" && cfg.url) $("#sync-url").value = cfg.url;
+  paintSyncOptions(cfg.mode);
+  setSyncStatus(cfg.mode);
+}
+
+async function applySync(config) {
+  if (DEMO) return;
+  try {
+    await invoke("set_sync_config", { config });
+  } catch (e) {
+    console.error("set_sync_config", e);
+  }
+}
+
+function wireSyncControls() {
+  $$(".sync-opt").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const mode = b.dataset.sync;
+      paintSyncOptions(mode);
+      if (mode === "own") {
+        $("#sync-url").focus();
+        return; // wait for a URL + Save
+      }
+      setSyncStatus(mode);
+      await applySync({ mode });
+    }),
+  );
+  const save = $("#sync-url-save");
+  if (save)
+    save.addEventListener("click", async () => {
+      const url = ($("#sync-url").value || "").trim();
+      if (!url) return;
+      setSyncStatus("own");
+      await applySync({ mode: "own", url });
+    });
 }
 
 // ---------- nav ----------
@@ -417,6 +491,7 @@ $("#lock-btn-2").addEventListener("click", doLock);
 $$(".nav-item").forEach((b) =>
   b.addEventListener("click", () => navTo(b.getAttribute("data-view"))),
 );
+wireSyncControls();
 
 function debounce(fn, ms) {
   let t;

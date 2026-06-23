@@ -413,6 +413,111 @@ where
     })
 }
 
+/// What can go wrong during one auto-sync round.
+#[derive(Debug)]
+pub enum SyncError {
+    /// The vault mutex was poisoned by a panicking thread.
+    Lock,
+    /// A durable-store error while snapshotting or merging.
+    Store(keepsake_store_sqlite::StoreError),
+    /// A relay/network error while pushing or pulling.
+    Relay(keepsake_relay::RelayError),
+}
+
+impl std::fmt::Display for SyncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SyncError::Lock => write!(f, "vault lock poisoned"),
+            SyncError::Store(e) => write!(f, "store error: {e:?}"),
+            SyncError::Relay(e) => write!(f, "relay error: {e:?}"),
+        }
+    }
+}
+
+impl std::error::Error for SyncError {}
+
+/// One auto-sync round against the vault's slot: **pull + merge first**, then push the merged
+/// snapshot back. The brief vault lock is never held across the network, so a slow relay can't
+/// block live clients. The relay only ever sees the sealed (encrypted) snapshot.
+pub async fn sync_once<E>(
+    state: &Arc<DaemonState<E>>,
+    client: &keepsake_relay::RelayClient,
+    slot: &str,
+    write_token: &[u8; 32],
+    sync_key: &[u8; 32],
+) -> Result<(), SyncError>
+where
+    E: Embedder + Send + Sync + 'static,
+{
+    // 1. Pull the remote snapshot first (no lock held during the network call).
+    let remote = client.pull_owned(slot).await.map_err(SyncError::Relay)?;
+
+    // 2. Merge it in (if any) and snapshot the merged state — under one brief lock, no `.await`.
+    let snapshot = {
+        let mut vault = state.vault.lock().map_err(|_| SyncError::Lock)?;
+        if let Some(bytes) = remote {
+            if let Some(incoming) = keepsake_sync::SyncState::open(&bytes, sync_key) {
+                if incoming
+                    .apply_to(vault.store(), slot)
+                    .map_err(SyncError::Store)?
+                {
+                    vault.rebuild_index(&state.kek).map_err(SyncError::Store)?;
+                }
+            }
+        }
+        keepsake_sync::SyncState::from_vault(vault.store())
+            .map_err(SyncError::Store)?
+            .seal(sync_key)
+    };
+
+    // 3. Push the merged snapshot back (no lock held during the network call).
+    client
+        .push_owned(slot, write_token, snapshot)
+        .await
+        .map_err(SyncError::Relay)?;
+    Ok(())
+}
+
+/// The auto-sync loop as a plain future: build a relay client and run [`sync_once`] every
+/// `period`, forever (transient errors are logged). Wrap this in your runtime's spawn —
+/// `tokio::spawn` (see [`spawn_sync`]) or `tauri::async_runtime::spawn` in the desktop app.
+pub async fn run_sync_loop<E>(
+    state: Arc<DaemonState<E>>,
+    relay_url: String,
+    slot: String,
+    write_token: [u8; 32],
+    sync_key: [u8; 32],
+    period: std::time::Duration,
+) where
+    E: Embedder + Send + Sync + 'static,
+{
+    let client = keepsake_relay::RelayClient::new(&relay_url, "");
+    let mut tick = tokio::time::interval(period);
+    loop {
+        tick.tick().await;
+        if let Err(e) = sync_once(&state, &client, &slot, &write_token, &sync_key).await {
+            eprintln!("keepsake auto-sync: {e}");
+        }
+    }
+}
+
+/// Spawn [`run_sync_loop`] on the ambient Tokio runtime. Returns the task handle (abort to stop).
+pub fn spawn_sync<E>(
+    state: Arc<DaemonState<E>>,
+    relay_url: String,
+    slot: String,
+    write_token: [u8; 32],
+    sync_key: [u8; 32],
+    period: std::time::Duration,
+) -> tokio::task::JoinHandle<()>
+where
+    E: Embedder + Send + Sync + 'static,
+{
+    tokio::spawn(run_sync_loop(
+        state, relay_url, slot, write_token, sync_key, period,
+    ))
+}
+
 /// A thin client to a running daemon over its Unix socket. MCP, proxy and desktop use this
 /// to read and write the shared vault with a scoped capability token — never the raw seed.
 /// Each call is one request/response on a fresh connection (cheap over a local socket).
@@ -525,6 +630,45 @@ mod tests {
         let vault = MemoryVault::new(SqliteVault::open_in_memory().unwrap(), MockEmbedder::new(64));
         let cap_root = roots.capability_root();
         (DaemonState::new(vault, kek, cap_root), cap_root)
+    }
+
+    #[tokio::test]
+    async fn auto_sync_converges_two_vaults_through_a_relay() {
+        let roots = RootKeys::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+        let slot = hex::encode(roots.sync_slot());
+        let write_token = roots.sync_write_token();
+        let sync_key = roots.sync_mac_key();
+        let kek = Kek::from_root(&roots.encryption_root);
+        let cap = roots.capability_root();
+
+        let base = keepsake_relay::serve_ephemeral("t").await.unwrap();
+        let client = keepsake_relay::RelayClient::new(&base, "");
+
+        // Device A holds a memory; device B is empty. Same seed → same slot + keys.
+        let mut va = MemoryVault::new(SqliteVault::open_in_memory().unwrap(), MockEmbedder::new(64));
+        va.remember(&kek, "the blue whale is the largest animal").unwrap();
+        let a = Arc::new(DaemonState::new(va, Kek::from_root(&roots.encryption_root), cap));
+        let b = Arc::new(DaemonState::new(
+            MemoryVault::new(SqliteVault::open_in_memory().unwrap(), MockEmbedder::new(64)),
+            Kek::from_root(&roots.encryption_root),
+            cap,
+        ));
+
+        // A publishes its merged snapshot; then B pulls + merges it.
+        sync_once(&a, &client, &slot, &write_token, &sync_key)
+            .await
+            .unwrap();
+        sync_once(&b, &client, &slot, &write_token, &sync_key)
+            .await
+            .unwrap();
+
+        // B can now recall what only A had remembered — proves merge + index rebuild.
+        let hits = {
+            let v = b.vault.lock().unwrap();
+            v.recall(&kek, "the blue whale is the largest animal", 1)
+                .unwrap()
+        };
+        assert_eq!(hits.len(), 1, "B should recall A's memory after auto-sync");
     }
 
     fn remember_req(text: &str, cap: Option<&str>) -> Value {
