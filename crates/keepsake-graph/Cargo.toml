@@ -1,0 +1,10 @@
+[package]
+name = "keepsake-graph"
+version = "0.0.0"
+description = "Keepsake knowledge graph: entities & relations distilled from memories, with erasure-aware edges."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+keepsake-core = { path = "../keepsake-core" }

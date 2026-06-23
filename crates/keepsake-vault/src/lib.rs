@@ -10,6 +10,8 @@ use keepsake_core::ledger::ContradictionLedger;
 use keepsake_core::CellId;
 use keepsake_crypto::Kek;
 use std::collections::HashSet;
+use keepsake_graph::GraphIndex;
+pub use keepsake_graph::{parse_triples, Triple};
 use keepsake_retrieval::{Embedder, VectorIndex};
 use keepsake_store_sqlite::{SqliteVault, StoreError};
 
@@ -105,6 +107,8 @@ pub struct MemoryVault<E: Embedder> {
     ledger: ContradictionLedger,
     /// Cell ids hidden from quality recall because a newer version superseded them.
     superseded: HashSet<[u8; 32]>,
+    /// Knowledge-graph index (entities & relations distilled from memories).
+    graph: GraphIndex,
 }
 
 impl<E: Embedder> MemoryVault<E> {
@@ -117,6 +121,7 @@ impl<E: Embedder> MemoryVault<E> {
             embedder,
             ledger: ContradictionLedger::new(),
             superseded: HashSet::new(),
+            graph: GraphIndex::new(),
         }
     }
 
@@ -319,12 +324,72 @@ impl<E: Embedder> MemoryVault<E> {
         self.ledger.current(subject)
     }
 
+    /// Record knowledge-graph triples distilled from memory `cell`: persist each edge and add it
+    /// to the in-RAM graph. Idempotent per `(cell, subject, relation, object)`.
+    pub fn add_triples(
+        &mut self,
+        cell: &CellId,
+        triples: &[Triple],
+        now: i64,
+    ) -> Result<(), StoreError> {
+        for t in triples {
+            self.store
+                .add_edge(cell, &t.subject, &t.relation, &t.object, now)?;
+            self.graph.add(cell.clone(), t.clone());
+        }
+        Ok(())
+    }
+
+    /// Convenience: record a single `(subject, relation, object)` triple from `cell`.
+    pub fn add_triple(
+        &mut self,
+        cell: &CellId,
+        subject: &str,
+        relation: &str,
+        object: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        self.add_triples(cell, &[Triple::new(subject, relation, object)], now)
+    }
+
+    /// What `entity` is connected to in the knowledge graph: `(relation, other entity)` pairs.
+    pub fn graph_neighbors(&self, entity: &str) -> Vec<(String, String)> {
+        self.graph.neighbors(entity)
+    }
+
+    /// Graph-enriched recall: the recency-ranked vector hits, plus any memory connected through
+    /// the knowledge graph to an entity named in `query` (deduped; superseded/forgotten cells
+    /// excluded). Surfaces relevant memories a pure vector search would miss.
+    pub fn recall_with_graph(
+        &self,
+        kek: &Kek,
+        query: &str,
+        k: usize,
+        now: i64,
+        params: RecencyParams,
+    ) -> Result<Vec<(CellId, String)>, StoreError> {
+        let mut out = self.recall_ranked(kek, query, k, now, params)?;
+        let mut seen: HashSet<[u8; 32]> = out.iter().map(|(id, _)| *id.as_bytes()).collect();
+        for cell in self.graph.cells_for_text(query) {
+            if self.superseded.contains(cell.as_bytes()) || !seen.insert(*cell.as_bytes()) {
+                continue;
+            }
+            if let Some(bytes) = self.store.recall(kek, &cell)? {
+                if let Ok(text) = String::from_utf8(bytes) {
+                    out.push((cell, text));
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Erase a memory: forget the content (cryptographic erasure) and drop its
     /// embedding from the index.
     pub fn forget(&mut self, id: &CellId) -> Result<(), StoreError> {
         self.store.forget(id)?;
         self.index.remove(id);
         self.superseded.remove(id.as_bytes());
+        self.graph.remove_cell(id);
         Ok(())
     }
 
@@ -446,6 +511,11 @@ impl<E: Embedder> MemoryVault<E> {
         }
         self.index = index;
         self.superseded = self.store.superseded_ids()?.into_iter().collect();
+        let mut graph = GraphIndex::new();
+        for (sc, s, r, o) in self.store.live_edges()? {
+            graph.add(CellId::from_bytes(sc), Triple::new(&s, &r, &o));
+        }
+        self.graph = graph;
         Ok(())
     }
 }
@@ -582,6 +652,41 @@ mod tests {
         assert!(!second, "the same value again does not create a second cell");
         assert_eq!(a, b);
         assert_eq!(vault.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn recall_with_graph_surfaces_a_connected_memory_vector_search_misses() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        let now = 1_700_000_000i64;
+        // X names Apollo directly; W's text does not, but a triple links W to Apollo.
+        let x = vault.remember_at(&kek, "Apollo launches on March 14", now).unwrap();
+        let w = vault.remember_at(&kek, "the keynote slot is confirmed", now).unwrap();
+        vault
+            .add_triples(&x, &[Triple::new("Apollo", "launches_on", "March 14")], now)
+            .unwrap();
+        vault
+            .add_triples(&w, &[Triple::new("Apollo", "has_event", "keynote")], now)
+            .unwrap();
+
+        // Plain vector recall (k=1) for "Apollo" returns the directly-matching X, not W.
+        let plain: Vec<CellId> = vault
+            .recall_ranked(&kek, "Apollo", 1, now, RecencyParams::default())
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert!(plain.contains(&x) && !plain.contains(&w));
+
+        // Graph-enriched recall also pulls in W, connected to Apollo, that the vector search missed.
+        let enriched: Vec<CellId> = vault
+            .recall_with_graph(&kek, "Apollo", 1, now, RecencyParams::default())
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert!(enriched.contains(&x), "keeps the direct hit");
+        assert!(enriched.contains(&w), "adds the graph-connected memory");
     }
 
     #[test]

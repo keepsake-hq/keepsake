@@ -46,6 +46,10 @@ pub struct CellRecord {
     pub wrapped: Vec<u8>,
 }
 
+/// A knowledge-graph edge as read back from the store:
+/// `(source_cell, subject, relation, object)`.
+pub type EdgeRow = ([u8; 32], String, String, String);
+
 /// A durable vault: append-only `cells` + `tombstones` (content plane) and an
 /// erasable `key_manifest` (key plane), all in one SQLite database.
 pub struct SqliteVault {
@@ -88,7 +92,16 @@ impl SqliteVault {
              );
              CREATE TABLE IF NOT EXISTS sync_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS superseded (cell_id BLOB PRIMARY KEY);
-             CREATE TABLE IF NOT EXISTS fact_subjects (subject TEXT PRIMARY KEY, cell_id BLOB NOT NULL);",
+             CREATE TABLE IF NOT EXISTS fact_subjects (subject TEXT PRIMARY KEY, cell_id BLOB NOT NULL);
+             CREATE TABLE IF NOT EXISTS edges (
+                 source_cell BLOB NOT NULL,
+                 subject     TEXT NOT NULL,
+                 relation    TEXT NOT NULL,
+                 object      TEXT NOT NULL,
+                 valid_from  INTEGER NOT NULL DEFAULT 0,
+                 valid_to    INTEGER,
+                 UNIQUE(source_cell, subject, relation, object)
+             );",
         )?;
         // Back-fill the column on vaults created before `created_at` existed; errors
         // (the column already exists) are expected and ignored.
@@ -251,6 +264,9 @@ impl SqliteVault {
             "INSERT OR IGNORE INTO tombstones (cell_id) VALUES (?1)",
             params![idb],
         )?;
+        // Erasure cascades into the knowledge graph: drop every edge sourced from this cell.
+        self.conn
+            .execute("DELETE FROM edges WHERE source_cell = ?1", params![idb])?;
         // Flush committed frames into the db and truncate the WAL to zero, so the
         // pre-delete page image of the wrapped DEK does not linger on disk.
         self.conn
@@ -447,6 +463,59 @@ impl SqliteVault {
         )?;
         Ok(())
     }
+
+    /// Store a knowledge-graph edge: the triple `(subject, relation, object)` was distilled
+    /// from memory `source_cell`. Idempotent on the `(source_cell, subject, relation, object)`
+    /// tuple, so re-extracting the same triple never duplicates it.
+    pub fn add_edge(
+        &self,
+        source_cell: &CellId,
+        subject: &str,
+        relation: &str,
+        object: &str,
+        valid_from: i64,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO edges (source_cell, subject, relation, object, valid_from)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                source_cell.as_bytes().as_slice(),
+                subject,
+                relation,
+                object,
+                valid_from
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// All edges whose source cell is still live, as `(source_cell, subject, relation, object)`.
+    /// Used to rebuild the in-RAM graph index on unlock.
+    pub fn live_edges(&self) -> Result<Vec<EdgeRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_cell, subject, relation, object FROM edges
+             WHERE source_cell NOT IN (SELECT cell_id FROM tombstones)",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (sc, s, r, o) = row?;
+            out.push((
+                sc.as_slice().try_into().map_err(|_| StoreError::Corrupt)?,
+                s,
+                r,
+                o,
+            ));
+        }
+        Ok(out)
+    }
 }
 
 /// Convert a stored blob into a 12-byte AES-GCM nonce.
@@ -516,6 +585,24 @@ mod tests {
             vault.recall(&kek, &old).unwrap().is_some(),
             "a superseded cell is hidden from recall but NOT erased"
         );
+    }
+
+    #[test]
+    fn graph_edges_persist_dedupe_and_forget_cascades() {
+        let vault = SqliteVault::open_in_memory().unwrap();
+        let kek = test_kek();
+        let a = vault.remember(&kek, b"Apollo ships in March").unwrap();
+        let b = vault.remember(&kek, b"Apollo is led by Eduard").unwrap();
+        vault.add_edge(&a, "Apollo", "ships_in", "March", 100).unwrap();
+        vault.add_edge(&b, "Apollo", "led_by", "Eduard", 100).unwrap();
+        vault.add_edge(&a, "Apollo", "ships_in", "March", 100).unwrap(); // idempotent
+
+        assert_eq!(vault.live_edges().unwrap().len(), 2, "the duplicate edge is ignored");
+
+        vault.forget(&a).unwrap();
+        let edges = vault.live_edges().unwrap();
+        assert_eq!(edges.len(), 1, "forgetting cell a cascades to drop its edge");
+        assert_eq!(edges[0].3, "Eduard", "only cell b's edge remains");
     }
 
     #[test]

@@ -1785,6 +1785,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "keepsake-graph"
+version = "0.0.0"
+dependencies = [
+ "keepsake-core",
+]
+
+[[package]]
 name = "keepsake-mcp"
 version = "0.0.0"
 dependencies = [
@@ -1873,6 +1880,7 @@ version = "0.0.0"
 dependencies = [
  "keepsake-core",
  "keepsake-crypto",
+ "keepsake-graph",
  "keepsake-retrieval",
  "keepsake-store-sqlite",
  "tempfile",

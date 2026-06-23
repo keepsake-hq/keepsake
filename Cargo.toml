@@ -6,6 +6,7 @@ members = [
     "crates/keepsake-store-sqlite",
     "crates/keepsake-retrieval",
     "crates/keepsake-vault",
+    "crates/keepsake-graph",
     "crates/keepsake-proxy",
     "crates/keepsake-firewall",
     "crates/keepsake-mcp",

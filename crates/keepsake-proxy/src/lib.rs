@@ -356,7 +356,7 @@ impl MemorySource {
         match self {
             MemorySource::Local { vault, kek } => {
                 let v = vault.lock().await;
-                Ok(v.recall_ranked(
+                Ok(v.recall_with_graph(
                     kek,
                     query,
                     k,
@@ -370,7 +370,7 @@ impl MemorySource {
             }
             MemorySource::Daemon(client) => {
                 let resp = with_cap(client, cap)
-                    .recall(query, k)
+                    .recall_graph(query, k)
                     .await
                     .map_err(|e| format!("daemon recall: {e}"))?;
                 Ok(resp["result"]["hits"]
@@ -413,6 +413,61 @@ impl MemorySource {
                     None => client.remember(text).await,
                 };
                 res.map_err(|e| format!("daemon remember: {e}"))?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Like [`MemorySource::remember`] but also links knowledge-graph `triples` to the newly
+    /// stored memory, so the graph auto-builds through the gateway.
+    pub async fn remember_with_graph(
+        &self,
+        text: &str,
+        cap: Option<&str>,
+        source: Option<&str>,
+        triples: &[keepsake_vault::Triple],
+    ) -> Result<(), String> {
+        match self {
+            MemorySource::Local { vault, kek } => {
+                let mut v = vault.lock().await;
+                let now = now_unix() as i64;
+                let (id, _stored) = v
+                    .remember_deduped_with_source(
+                        kek,
+                        text,
+                        keepsake_vault::DEDUP_THRESHOLD,
+                        now,
+                        source,
+                    )
+                    .map_err(|e| format!("{e:?}"))?;
+                for t in triples {
+                    v.add_triple(&id, &t.subject, &t.relation, &t.object, now)
+                        .map_err(|e| format!("{e:?}"))?;
+                }
+                Ok(())
+            }
+            MemorySource::Daemon(client) => {
+                let client = with_cap(client, cap);
+                let resp = match source {
+                    Some(s) => client.remember_with_source(text, s).await,
+                    None => client.remember(text).await,
+                }
+                .map_err(|e| format!("daemon remember: {e}"))?;
+                if !triples.is_empty() {
+                    if let Some(cid) = resp["result"]["cell_id"].as_str() {
+                        let arr: Vec<serde_json::Value> = triples
+                            .iter()
+                            .map(|t| {
+                                serde_json::json!({
+                                    "subject": t.subject,
+                                    "relation": t.relation,
+                                    "object": t.object,
+                                })
+                            })
+                            .collect();
+                        let _ = client.add_triples(cid, serde_json::Value::Array(arr)).await;
+                    }
+                }
                 Ok(())
             }
         }
@@ -520,6 +575,44 @@ async fn extract_facts(state: &AppState, model: &str, user_text: &str) -> Vec<St
     }
 }
 
+/// Distill knowledge-graph triples from `text` via the LOCAL model (never a cloud provider, so
+/// building the graph never causes silent cloud egress). Empty on any error or a `NONE` reply.
+async fn extract_triples(state: &AppState, model: &str, text: &str) -> Vec<keepsake_vault::Triple> {
+    let extraction = ChatRequest {
+        model: model.to_string(),
+        messages: vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: "Extract knowledge-graph triples from the user's message, one per line \
+                          as `subject | relation | object`, using short entity names. If there \
+                          are none, reply exactly NONE."
+                    .to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: text.to_string(),
+            },
+        ],
+        stream: false,
+    };
+    match state
+        .http
+        .post(format!("{}/v1/chat/completions", state.ollama_url))
+        .json(&extraction)
+        .send()
+        .await
+    {
+        Ok(r) => {
+            let body: serde_json::Value = r.json().await.unwrap_or_default();
+            let content = body["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap_or("");
+            keepsake_vault::parse_triples(content)
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
 async fn chat_completions(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -622,12 +715,23 @@ async fn chat_completions(
         if let Some(text) = last_user_message(&req) {
             let cap = header("x-keepsake-capability");
             let source = format!("proxy:{}", req.model);
-            if std::env::var("KEEPSAKE_AUTO_EXTRACT").is_ok() {
-                for fact in extract_facts(&state, &req.model, text).await {
-                    let _ = state.memory.remember(&fact, cap, Some(&source)).await;
-                }
+            let auto_graph = std::env::var("KEEPSAKE_AUTO_GRAPH").is_ok();
+            // Either distilled durable facts (KEEPSAKE_AUTO_EXTRACT) or the raw turn.
+            let items: Vec<String> = if std::env::var("KEEPSAKE_AUTO_EXTRACT").is_ok() {
+                extract_facts(&state, &req.model, text).await
             } else {
-                let _ = state.memory.remember(text, cap, Some(&source)).await;
+                vec![text.to_string()]
+            };
+            for item in items {
+                if auto_graph {
+                    let triples = extract_triples(&state, &req.model, &item).await;
+                    let _ = state
+                        .memory
+                        .remember_with_graph(&item, cap, Some(&source), &triples)
+                        .await;
+                } else {
+                    let _ = state.memory.remember(&item, cap, Some(&source)).await;
+                }
             }
         }
     }

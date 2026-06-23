@@ -76,6 +76,8 @@ impl<E: Embedder> DaemonState<E> {
             "vault/forget" => self.forget(id, &params, &caller),
             "vault/status" => self.status(id, &caller),
             "vault/consolidate" => self.consolidate(id, &caller),
+            "graph/add_triples" => self.graph_add_triples(id, &params, &caller),
+            "graph/neighbors" => self.graph_neighbors(id, &params, &caller),
             other => rpc_error(id, -32601, &format!("method not found: {other}")),
         }
     }
@@ -140,7 +142,15 @@ impl<E: Embedder> DaemonState<E> {
         let k = params.get("k").and_then(Value::as_u64).unwrap_or(4) as usize;
         let k = caller.clamp_records(k);
         let vault = self.vault.lock().expect("vault mutex poisoned");
-        match vault.recall_ranked(&self.kek, query, k, unix_now() as i64, RecencyParams::default()) {
+        let now = unix_now() as i64;
+        // Opt-in graph enrichment (`params.graph == true`): also surface memories connected
+        // through the knowledge graph to an entity in the query. Default stays pure-vector.
+        let result = if params.get("graph").and_then(Value::as_bool).unwrap_or(false) {
+            vault.recall_with_graph(&self.kek, query, k, now, RecencyParams::default())
+        } else {
+            vault.recall_ranked(&self.kek, query, k, now, RecencyParams::default())
+        };
+        match result {
             Ok(hits) => {
                 let hits: Vec<Value> = hits
                     .into_iter()
@@ -198,6 +208,55 @@ impl<E: Embedder> DaemonState<E> {
             Ok(merged) => rpc_ok(id, json!({ "merged": merged })),
             Err(e) => rpc_error(id, -32010, &format!("consolidate failed: {e:?}")),
         }
+    }
+
+    /// Add knowledge-graph triples distilled from a memory cell. Write-scoped. Malformed
+    /// entries are skipped; returns how many edges were added.
+    fn graph_add_triples(&self, id: Value, params: &Value, caller: &Caller) -> Value {
+        if !caller.can_write() {
+            return rpc_error(id, -32001, "capability does not permit write");
+        }
+        let Some(cell_id) = params
+            .get("cell_id")
+            .and_then(Value::as_str)
+            .and_then(decode_cell_id)
+        else {
+            return rpc_error(id, -32602, "graph/add_triples requires params.cell_id (hex)");
+        };
+        let mut vault = self.vault.lock().expect("vault mutex poisoned");
+        let mut added = 0usize;
+        if let Some(arr) = params.get("triples").and_then(Value::as_array) {
+            for t in arr {
+                let (Some(s), Some(r), Some(o)) = (
+                    t.get("subject").and_then(Value::as_str),
+                    t.get("relation").and_then(Value::as_str),
+                    t.get("object").and_then(Value::as_str),
+                ) else {
+                    continue;
+                };
+                if vault.add_triple(&cell_id, s, r, o, unix_now() as i64).is_ok() {
+                    added += 1;
+                }
+            }
+        }
+        rpc_ok(id, json!({ "added": added }))
+    }
+
+    /// What an entity is connected to in the knowledge graph. Read-scoped.
+    fn graph_neighbors(&self, id: Value, params: &Value, caller: &Caller) -> Value {
+        if !caller.can_read() {
+            return rpc_error(id, -32001, "capability does not permit read");
+        }
+        let Some(entity) = params.get("entity").and_then(Value::as_str) else {
+            return rpc_error(id, -32602, "graph/neighbors requires params.entity (string)");
+        };
+        let vault = self.vault.lock().expect("vault mutex poisoned");
+        let neighbors: Vec<Value> = vault
+            .graph_neighbors(entity)
+            .into_iter()
+            .map(|(relation, entity)| json!({ "relation": relation, "entity": entity }))
+            .collect();
+        rpc_ok(id, json!({ "neighbors": neighbors }))
     }
 }
 
@@ -394,6 +453,26 @@ impl DaemonClient {
             .await
     }
 
+    /// Recall with knowledge-graph enrichment: vector hits plus graph-connected memories.
+    pub async fn recall_graph(&self, query: &str, k: usize) -> std::io::Result<Value> {
+        self.call("vault/recall", json!({ "query": query, "k": k, "graph": true }))
+            .await
+    }
+
+    /// Add knowledge-graph triples (`[{subject,relation,object}, …]`) distilled from a memory.
+    pub async fn add_triples(&self, cell_id_hex: &str, triples: Value) -> std::io::Result<Value> {
+        self.call(
+            "graph/add_triples",
+            json!({ "cell_id": cell_id_hex, "triples": triples }),
+        )
+        .await
+    }
+
+    /// What `entity` is connected to in the knowledge graph.
+    pub async fn graph_neighbors(&self, entity: &str) -> std::io::Result<Value> {
+        self.call("graph/neighbors", json!({ "entity": entity })).await
+    }
+
     pub async fn recall(&self, query: &str, k: usize) -> std::io::Result<Value> {
         self.call("vault/recall", json!({ "query": query, "k": k })).await
     }
@@ -585,6 +664,62 @@ mod tests {
         assert!(
             !texts.iter().any(|t| t.contains("Python")),
             "the superseded fact is hidden over the hub: {r}"
+        );
+    }
+
+    #[test]
+    fn daemon_graph_enriches_recall_and_exposes_neighbors() {
+        let (state, _) = test_state();
+        let x = state.handle(&remember_req("Apollo launches on March 14", None));
+        let w = state.handle(&remember_req("the keynote slot is confirmed", None));
+        let xid = x["result"]["cell_id"].as_str().unwrap().to_string();
+        let wid = w["result"]["cell_id"].as_str().unwrap().to_string();
+
+        // W's text never names Apollo, but a triple links it to Apollo.
+        state.handle(&json!({"jsonrpc":"2.0","id":1,"method":"graph/add_triples","params":{
+            "cell_id": xid, "triples":[{"subject":"Apollo","relation":"launches_on","object":"March 14"}]
+        }}));
+        let added = state.handle(&json!({"jsonrpc":"2.0","id":2,"method":"graph/add_triples","params":{
+            "cell_id": wid, "triples":[{"subject":"Apollo","relation":"has_event","object":"keynote"}]
+        }}));
+        assert_eq!(added["result"]["added"], 1, "edge added: {added}");
+
+        // Plain recall (k=1) → only the directly-matching memory.
+        let r = state.handle(&recall_req("Apollo", 1, None));
+        let texts: Vec<String> = r["result"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["text"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("launches")) && !texts.iter().any(|t| t.contains("keynote")),
+            "plain recall misses the graph-only memory: {r}"
+        );
+
+        // Graph-enriched recall → also the connected memory the vector search missed.
+        let r = state.handle(&json!({
+            "jsonrpc":"2.0","id":3,"method":"vault/recall","params":{"query":"Apollo","k":1,"graph":true}
+        }));
+        let texts: Vec<String> = r["result"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["text"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("keynote")),
+            "graph enrichment surfaces the connected memory: {r}"
+        );
+
+        // Neighbors of Apollo: March 14 and keynote.
+        let r = state.handle(&json!({
+            "jsonrpc":"2.0","id":4,"method":"graph/neighbors","params":{"entity":"Apollo"}
+        }));
+        assert_eq!(
+            r["result"]["neighbors"].as_array().map(Vec::len),
+            Some(2),
+            "Apollo connects to two entities: {r}"
         );
     }
 
