@@ -49,6 +49,14 @@ fn socket_path() -> std::path::PathBuf {
     keepsake_dir().join("daemon.sock")
 }
 
+/// Current wall-clock time in Unix seconds (0 if the clock predates the epoch).
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Find Nomic model files already present on disk (no network): a flat directory we control,
 /// or the Hugging Face snapshot inside the download cache.
 fn local_model_dir() -> Option<std::path::PathBuf> {
@@ -197,7 +205,7 @@ fn lock(state: State<AppState>) {
 fn remember(state: State<AppState>, text: String) -> Result<String, String> {
     with_vault(&state, |vault, kek| {
         vault
-            .remember(kek, &text)
+            .remember_with_source(kek, &text, now_unix(), Some("desktop"))
             .map(|id| hex::encode(id.as_bytes()))
             .map_err(|e| format!("{e:?}"))
     })
@@ -207,10 +215,17 @@ fn remember(state: State<AppState>, text: String) -> Result<String, String> {
 fn recall(state: State<AppState>, query: String, k: usize) -> Result<Vec<MemoryHit>, String> {
     with_vault(&state, |vault, kek| {
         Ok(vault
-            .recall(kek, &query, k)
+            .recall_with_graph(
+                kek,
+                &query,
+                k,
+                now_unix(),
+                keepsake_vault::RecencyParams::default(),
+            )
             .map_err(|e| format!("{e:?}"))?
             .into_iter()
             .map(|(id, text)| MemoryHit {
+                source: vault.source(&id).ok().flatten(),
                 id: hex::encode(id.as_bytes()),
                 text,
             })
@@ -226,6 +241,7 @@ fn recent(state: State<AppState>, limit: usize) -> Result<Vec<RecentMemory>, Str
             .map_err(|e| format!("{e:?}"))?
             .into_iter()
             .map(|(id, text, created_at)| RecentMemory {
+                source: vault.source(&id).ok().flatten(),
                 id: hex::encode(id.as_bytes()),
                 text,
                 created_at,

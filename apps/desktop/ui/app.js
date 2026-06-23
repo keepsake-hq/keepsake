@@ -87,6 +87,7 @@ function cardHtml(mem, palette) {
   const title = (nl === -1 ? text : text.slice(0, nl)).trim() || "(empty)";
   const desc = nl === -1 ? "" : text.slice(nl + 1).trim();
   const icon = TRAVEL_RE.test(text) ? ICON_PLANE : ICON_NOTE;
+  const src = sourceLabel(mem.source);
   return `
     <div class="group bg-white border border-neutral-200/80 rounded-2xl px-4 py-3.5 flex items-start gap-3.5 hover:shadow-sm transition">
       <span class="w-10 h-10 rounded-xl ${palette} flex items-center justify-center shrink-0">${icon}</span>
@@ -99,7 +100,10 @@ function cardHtml(mem, palette) {
           </div>
         </div>
         ${desc ? `<div class="text-sm text-neutral-500 mt-0.5 line-clamp-2">${escapeHtml(desc)}</div>` : ""}
-        <div class="mt-2 inline-flex items-center gap-1.5 text-xs text-neutral-400">${ICON_LOCK_S} End-to-end encrypted</div>
+        <div class="mt-2 flex items-center gap-2.5 text-xs text-neutral-400">
+          <span class="inline-flex items-center gap-1.5">${ICON_LOCK_S} End-to-end encrypted</span>
+          ${src ? `<span class="text-neutral-300">·</span><span>${escapeHtml(src)}</span>` : ""}
+        </div>
       </div>
     </div>`;
 }
@@ -114,6 +118,27 @@ function escapeHtml(s) {
 
 function countLabel(n) {
   return `${n} ${n === 1 ? "memory" : "memories"}`;
+}
+
+// A friendly provenance label from a raw source tag (e.g. "proxy:openai:gpt-4" -> "via GPT",
+// "mcp:claude" -> "via Claude", "desktop" -> "added here"). Empty when unknown.
+function sourceLabel(source) {
+  if (!source) return "";
+  if (source === "desktop") return "added here";
+  if (source === "cli") return "terminal";
+  const p = source.split(":");
+  if (p[0] === "proxy") return "via " + niceModel(p[p.length - 1]);
+  if (p[0] === "mcp") return "via " + niceModel(p[1] || "agent");
+  return source;
+}
+function niceModel(m) {
+  const s = (m || "").toLowerCase();
+  if (s.includes("claude")) return "Claude";
+  if (s.includes("gpt")) return "GPT";
+  if (s.includes("llama")) return "Llama";
+  if (s.includes("gemini")) return "Gemini";
+  if (s.includes("mistral")) return "Mistral";
+  return m ? m.charAt(0).toUpperCase() + m.slice(1) : "a model";
 }
 
 function renderTimeline(memories) {
@@ -221,7 +246,7 @@ async function doSearch() {
   if (DEMO) {
     hits = DEMO_MEMORIES.filter((m) =>
       m.text.toLowerCase().includes(q.toLowerCase()),
-    ).map((m) => ({ id: m.id, text: m.text }));
+    ).map((m) => ({ id: m.id, text: m.text, source: m.source }));
   } else {
     try {
       hits = await invoke("recall", { query: q, k: 8 });
@@ -240,8 +265,9 @@ async function doSearch() {
         <span class="w-12 h-12 rounded-xl ${palette} flex items-center justify-center shrink-0">${icon}</span>
         <div class="min-w-0 flex-1">
           <div class="text-[15px] font-semibold text-neutral-900 truncate">${escapeHtml(oneLine)}</div>
-          <div class="mt-1.5 inline-flex items-center gap-1.5 rounded-md bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">
-            ${ICON_LOCK_S} Found locally via Nomic
+          <div class="mt-1.5 flex items-center gap-2">
+            <span class="inline-flex items-center gap-1.5 rounded-md bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">${ICON_LOCK_S} Found locally via Nomic</span>
+            ${sourceLabel(h.source) ? `<span class="text-xs text-neutral-400">· ${escapeHtml(sourceLabel(h.source))}</span>` : ""}
           </div>
         </div>
         <svg class="w-5 h-5 text-neutral-300 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
@@ -409,16 +435,19 @@ const DEMO_MEMORIES = (() => {
       id: "a1",
       created_at: now - 3600,
       text: "Dentist appointment: Dr. Berger\nMonday, July 3 at 2:00 PM — practice on the market square",
+      source: "mcp:claude",
     },
     {
       id: "b2",
       created_at: now - 7200,
       text: "Idea for a weekend project\nBuild a minimalist, privacy-first habit tracker.",
+      source: "desktop",
     },
     {
       id: "c3",
       created_at: now - day - 3600,
       text: "Berlin trip\nArrive Friday, July 4 — return Sunday, July 6. Hotel still to book.",
+      source: "proxy:openai:gpt-4",
     },
     {
       id: "d4",

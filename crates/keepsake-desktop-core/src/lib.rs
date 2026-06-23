@@ -6,7 +6,7 @@ use keepsake_core::CellId;
 use keepsake_crypto::Kek;
 use keepsake_retrieval::Embedder;
 use keepsake_store_sqlite::StoreError;
-use keepsake_vault::MemoryVault;
+use keepsake_vault::{MemoryVault, RecencyParams};
 use serde::Serialize;
 
 /// One recalled memory, ready to send to the frontend.
@@ -14,6 +14,8 @@ use serde::Serialize;
 pub struct MemoryHit {
     pub id: String,
     pub text: String,
+    /// Where the memory came from (e.g. `desktop`, `proxy:openai:gpt-4`, `mcp:claude`), if known.
+    pub source: Option<String>,
 }
 
 /// Vault status for the frontend.
@@ -29,6 +31,8 @@ pub struct RecentMemory {
     pub id: String,
     pub text: String,
     pub created_at: i64,
+    /// Where the memory came from, if known.
+    pub source: Option<String>,
 }
 
 /// An unlocked vault plus its KEK — the desktop app's session state.
@@ -42,27 +46,29 @@ impl<E: Embedder> Vaulted<E> {
         Vaulted { vault, kek }
     }
 
-    /// Store a memory; returns the cell id (hex).
+    /// Store a memory (tagged with `desktop` provenance); returns the cell id (hex).
     pub fn remember(&mut self, text: &str) -> Result<String, String> {
         self.vault
-            .remember(&self.kek, text)
+            .remember_with_source(&self.kek, text, now_unix(), Some("desktop"))
             .map(|id| hex::encode(id.as_bytes()))
             .map_err(store_err)
     }
 
-    /// Semantic recall of up to `k` memories.
+    /// Quality recall of up to `k` memories: recency-weighted, superseded facts hidden, and
+    /// enriched with knowledge-graph–connected memories, each carrying its provenance.
     pub fn recall(&self, query: &str, k: usize) -> Result<Vec<MemoryHit>, String> {
-        self.vault
-            .recall(&self.kek, query, k)
-            .map(|hits| {
-                hits.into_iter()
-                    .map(|(id, text)| MemoryHit {
-                        id: hex::encode(id.as_bytes()),
-                        text,
-                    })
-                    .collect()
+        let hits = self
+            .vault
+            .recall_with_graph(&self.kek, query, k, now_unix(), RecencyParams::default())
+            .map_err(store_err)?;
+        Ok(hits
+            .into_iter()
+            .map(|(id, text)| MemoryHit {
+                source: self.vault.source(&id).ok().flatten(),
+                id: hex::encode(id.as_bytes()),
+                text,
             })
-            .map_err(store_err)
+            .collect())
     }
 
     /// Cryptographically erase a memory by its cell id (hex).
@@ -78,20 +84,18 @@ impl<E: Embedder> Vaulted<E> {
             .map_err(store_err)
     }
 
-    /// The most recent memories, newest first — backs the dashboard timeline.
+    /// The most recent memories, newest first — backs the dashboard timeline (with provenance).
     pub fn recent(&self, limit: usize) -> Result<Vec<RecentMemory>, String> {
-        self.vault
-            .recent(&self.kek, limit)
-            .map(|rows| {
-                rows.into_iter()
-                    .map(|(id, text, created_at)| RecentMemory {
-                        id: hex::encode(id.as_bytes()),
-                        text,
-                        created_at,
-                    })
-                    .collect()
+        let rows = self.vault.recent(&self.kek, limit).map_err(store_err)?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, text, created_at)| RecentMemory {
+                source: self.vault.source(&id).ok().flatten(),
+                id: hex::encode(id.as_bytes()),
+                text,
+                created_at,
             })
-            .map_err(store_err)
+            .collect())
     }
 
     /// Current vault status.
@@ -105,6 +109,14 @@ impl<E: Embedder> Vaulted<E> {
 
 fn store_err(e: StoreError) -> String {
     format!("vault error: {e:?}")
+}
+
+/// Current wall-clock time in Unix seconds (0 if the clock predates the epoch).
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -138,6 +150,11 @@ mod tests {
         let hits = v.recall("alpha alpha alpha", 1).unwrap();
         assert_eq!(hits[0].text, "alpha alpha alpha");
         assert_eq!(hits[0].id, id);
+        assert_eq!(
+            hits[0].source.as_deref(),
+            Some("desktop"),
+            "desktop memories carry their provenance"
+        );
 
         assert_eq!(v.status().unwrap().memories, 1);
 
