@@ -6,8 +6,10 @@
 //! and drops the embedding. The in-RAM index is rebuilt from persisted content on
 //! open (embeddings are derived from content, the single erasable source of truth).
 
+use keepsake_core::ledger::ContradictionLedger;
 use keepsake_core::CellId;
 use keepsake_crypto::Kek;
+use std::collections::HashSet;
 use keepsake_retrieval::{Embedder, VectorIndex};
 use keepsake_store_sqlite::{SqliteVault, StoreError};
 
@@ -61,11 +63,48 @@ pub fn open_contract_portion(
 /// existing one and not stored again — the write-time anti-bloat guard.
 pub const DEDUP_THRESHOLD: f32 = 0.92;
 
+/// Tunables for recency-weighted recall: how strongly newer memories are favoured.
+#[derive(Clone, Copy, Debug)]
+pub struct RecencyParams {
+    /// Half-life of the recency multiplier, in seconds.
+    pub half_life_secs: f64,
+    /// Floor in `[0, 1]`: an infinitely old memory still keeps at least this fraction of
+    /// its similarity score, so an old-but-relevant memory never vanishes — recency only
+    /// breaks ties and nudges, it does not erase the past.
+    pub floor: f32,
+}
+
+impl Default for RecencyParams {
+    fn default() -> Self {
+        // 90-day half-life, generous 0.5 floor.
+        RecencyParams {
+            half_life_secs: 90.0 * 24.0 * 60.0 * 60.0,
+            floor: 0.5,
+        }
+    }
+}
+
+impl RecencyParams {
+    /// The recency multiplier for a memory of the given age (seconds): `1.0` when fresh,
+    /// decaying by half every `half_life_secs`, but never below `floor`.
+    fn weight(&self, age_secs: f64) -> f32 {
+        if age_secs <= 0.0 {
+            return 1.0;
+        }
+        let decay = 0.5_f64.powf(age_secs / self.half_life_secs) as f32;
+        self.floor + (1.0 - self.floor) * decay
+    }
+}
+
 /// A semantic memory vault over a [`SqliteVault`] and a local [`Embedder`].
 pub struct MemoryVault<E: Embedder> {
     store: SqliteVault,
     index: VectorIndex,
     embedder: E,
+    /// Bi-temporal history of keyed facts (in-session); see [`MemoryVault::remember_fact`].
+    ledger: ContradictionLedger,
+    /// Cell ids hidden from quality recall because a newer version superseded them.
+    superseded: HashSet<[u8; 32]>,
 }
 
 impl<E: Embedder> MemoryVault<E> {
@@ -76,6 +115,8 @@ impl<E: Embedder> MemoryVault<E> {
             store,
             index: VectorIndex::new(),
             embedder,
+            ledger: ContradictionLedger::new(),
+            superseded: HashSet::new(),
         }
     }
 
@@ -137,11 +178,137 @@ impl<E: Embedder> MemoryVault<E> {
         Ok(out)
     }
 
+    /// Like [`MemoryVault::remember`] but with an explicit creation time (Unix seconds);
+    /// indexes the embedding too. Used by the recency timeline and deterministic tests.
+    pub fn remember_at(
+        &mut self,
+        kek: &Kek,
+        text: &str,
+        created_at: i64,
+    ) -> Result<CellId, StoreError> {
+        let id = self.store.remember_at(kek, text.as_bytes(), created_at)?;
+        let vector = self
+            .embedder
+            .embed(text)
+            .map_err(|e| StoreError::Embed(e.to_string()))?;
+        self.index.add(id.clone(), &vector);
+        Ok(id)
+    }
+
+    /// Semantic recall, re-ranked so a more recent memory edges out an equally-relevant
+    /// older one. `now` is the reference time (Unix seconds). Every indexed candidate is
+    /// scored as `cosine * recency_weight(age)` (so recency can promote a slightly-less
+    /// similar but newer hit), then the top `k` are decrypted, most relevant first.
+    pub fn recall_ranked(
+        &self,
+        kek: &Kek,
+        query: &str,
+        k: usize,
+        now: i64,
+        params: RecencyParams,
+    ) -> Result<Vec<(CellId, String)>, StoreError> {
+        let query_vec = self
+            .embedder
+            .embed(query)
+            .map_err(|e| StoreError::Embed(e.to_string()))?;
+        // Score every candidate (not just the top-k by cosine) so recency can promote a
+        // slightly-less-similar but newer hit above an older one.
+        let mut scored: Vec<(CellId, f32)> = Vec::new();
+        for (id, cosine) in self.index.search(&query_vec, self.index.len()) {
+            if self.superseded.contains(id.as_bytes()) {
+                continue; // a newer version of this fact exists — hide the stale one
+            }
+            let weight = match self.store.created_at(&id)? {
+                Some(ts) => params.weight((now - ts).max(0) as f64),
+                None => 1.0,
+            };
+            scored.push((id, cosine * weight));
+        }
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        scored.truncate(k);
+        let mut out = Vec::new();
+        for (id, _score) in scored {
+            if let Some(bytes) = self.store.recall(kek, &id)? {
+                if let Ok(text) = String::from_utf8(bytes) {
+                    out.push((id, text));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Like [`MemoryVault::remember_at`] but also records a provenance `source` (where the
+    /// memory came from, e.g. `proxy:openai:gpt-4` / `mcp:claude` / `desktop` / `cli`).
+    pub fn remember_with_source(
+        &mut self,
+        kek: &Kek,
+        text: &str,
+        created_at: i64,
+        source: Option<&str>,
+    ) -> Result<CellId, StoreError> {
+        let id = self
+            .store
+            .remember_with_source(kek, text.as_bytes(), created_at, source)?;
+        let vector = self
+            .embedder
+            .embed(text)
+            .map_err(|e| StoreError::Embed(e.to_string()))?;
+        self.index.add(id.clone(), &vector);
+        Ok(id)
+    }
+
+    /// The provenance `source` of a memory, if one was recorded.
+    pub fn source(&self, id: &CellId) -> Result<Option<String>, StoreError> {
+        self.store.source(id)
+    }
+
+    /// Remember a keyed fact: record `value` for `subject` in the bi-temporal ledger and,
+    /// if it changes a previously-stored value, mark the old cell **superseded** (kept and
+    /// still erasable, but hidden from quality recall). Returns `(cell_id, changed)`;
+    /// `changed` is `false` when that value was already current (no new cell is written).
+    ///
+    /// The `subject` key is supplied by the caller; entity-derived keys — so that
+    /// differently-worded updates of the same fact link up — arrive with the graph layer.
+    pub fn remember_fact(
+        &mut self,
+        kek: &Kek,
+        subject: &str,
+        value: &str,
+        now: i64,
+    ) -> Result<(CellId, bool), StoreError> {
+        let prior = self.store.subject_current(subject)?;
+        let changed = self.ledger.record(subject, value, now as u64);
+        match (prior, changed) {
+            // The same value is already current → don't write a duplicate cell.
+            (Some(existing), false) => Ok((existing, false)),
+            // A different value → store the new one and supersede the old.
+            (Some(old), true) => {
+                let id = self.remember_with_source(kek, value, now, Some("fact"))?;
+                self.store.mark_superseded(&old)?;
+                self.superseded.insert(*old.as_bytes());
+                self.store.set_subject_current(subject, &id)?;
+                Ok((id, true))
+            }
+            // First value ever recorded for this subject.
+            (None, _) => {
+                let id = self.remember_with_source(kek, value, now, Some("fact"))?;
+                self.store.set_subject_current(subject, &id)?;
+                Ok((id, true))
+            }
+        }
+    }
+
+    /// The currently-valid value for fact `subject` (in-session ledger view).
+    pub fn current_fact(&self, subject: &str) -> Option<&str> {
+        self.ledger.current(subject)
+    }
+
     /// Erase a memory: forget the content (cryptographic erasure) and drop its
     /// embedding from the index.
     pub fn forget(&mut self, id: &CellId) -> Result<(), StoreError> {
         self.store.forget(id)?;
         self.index.remove(id);
+        self.superseded.remove(id.as_bytes());
         Ok(())
     }
 
@@ -262,6 +429,7 @@ impl<E: Embedder> MemoryVault<E> {
             }
         }
         self.index = index;
+        self.superseded = self.store.superseded_ids()?.into_iter().collect();
         Ok(())
     }
 }
@@ -297,6 +465,99 @@ mod tests {
         let hits = vault.recall(&kek, "bravo bravo bravo", 1).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].1, "bravo bravo bravo");
+    }
+
+    #[test]
+    fn recency_weight_decays_to_floor_not_zero() {
+        let p = RecencyParams::default();
+        assert!((p.weight(0.0) - 1.0).abs() < 1e-6, "fresh memory keeps full weight");
+        assert!(
+            (p.weight(p.half_life_secs) - 0.75).abs() < 1e-3,
+            "one half-life ≈ floor + half of the remainder (0.5 + 0.25)"
+        );
+        assert!(p.weight(1e12) >= p.floor, "never decays below the floor");
+        assert!(p.weight(1e12) < 0.51, "but approaches the floor for ancient memories");
+    }
+
+    #[test]
+    fn recall_ranked_prefers_recent_among_equally_similar() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        let now = 1_700_000_000i64;
+        let day = 86_400i64;
+        // Same text → identical embedding → identical cosine; only the age differs, so
+        // recency must break the tie toward the newer memory.
+        let old = vault
+            .remember_at(&kek, "alpha alpha alpha", now - 365 * day)
+            .unwrap();
+        let new = vault.remember_at(&kek, "alpha alpha alpha", now).unwrap();
+
+        let hits = vault
+            .recall_ranked(&kek, "alpha alpha alpha", 2, now, RecencyParams::default())
+            .unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].0, new, "the newer memory ranks first");
+        assert_eq!(hits[1].0, old, "the older one second");
+    }
+
+    #[test]
+    fn remember_with_source_records_provenance_and_stays_recallable() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        let id = vault
+            .remember_with_source(&kek, "berlin trip friday", 100, Some("proxy:openai:gpt-4"))
+            .unwrap();
+        assert_eq!(
+            vault.source(&id).unwrap().as_deref(),
+            Some("proxy:openai:gpt-4")
+        );
+        let hits = vault.recall(&kek, "berlin trip friday", 1).unwrap();
+        assert_eq!(hits[0].0, id, "a sourced memory is recalled like any other");
+    }
+
+    #[test]
+    fn remember_fact_supersedes_old_value_and_hides_it_from_recall() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        let now = 1_700_000_000i64;
+        let (py, first) = vault
+            .remember_fact(&kek, "language", "I code in Python", now)
+            .unwrap();
+        assert!(first, "the first value is stored");
+        let (rs, changed) = vault
+            .remember_fact(&kek, "language", "I switched to Rust", now + 100)
+            .unwrap();
+        assert!(changed, "a different value supersedes the old one");
+        assert_ne!(py, rs);
+        assert_eq!(vault.current_fact("language"), Some("I switched to Rust"));
+
+        let ids: Vec<CellId> = vault
+            .recall_ranked(
+                &kek,
+                "I code in Python switched Rust language",
+                5,
+                now + 100,
+                RecencyParams::default(),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert!(ids.contains(&rs), "the current fact surfaces");
+        assert!(!ids.contains(&py), "the superseded fact is hidden from recall");
+    }
+
+    #[test]
+    fn remember_fact_same_value_twice_writes_one_cell() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        let now = 1_700_000_000i64;
+        let (a, first) = vault.remember_fact(&kek, "home", "Vienna", now).unwrap();
+        let (b, second) = vault.remember_fact(&kek, "home", "Vienna", now + 10).unwrap();
+        assert!(first, "first record stores");
+        assert!(!second, "the same value again does not create a second cell");
+        assert_eq!(a, b);
+        assert_eq!(vault.count().unwrap(), 1);
     }
 
     #[test]

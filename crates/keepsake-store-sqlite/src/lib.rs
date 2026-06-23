@@ -86,7 +86,9 @@ impl SqliteVault {
                  wrap_nonce BLOB NOT NULL,
                  wrapped    BLOB NOT NULL
              );
-             CREATE TABLE IF NOT EXISTS sync_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL);",
+             CREATE TABLE IF NOT EXISTS sync_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS superseded (cell_id BLOB PRIMARY KEY);
+             CREATE TABLE IF NOT EXISTS fact_subjects (subject TEXT PRIMARY KEY, cell_id BLOB NOT NULL);",
         )?;
         // Back-fill the column on vaults created before `created_at` existed; errors
         // (the column already exists) are expected and ignored.
@@ -94,6 +96,8 @@ impl SqliteVault {
             "ALTER TABLE cells ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0",
             [],
         );
+        // Provenance column for vaults created before `source` existed.
+        let _ = conn.execute("ALTER TABLE cells ADD COLUMN source TEXT", []);
         Ok(SqliteVault { conn })
     }
 
@@ -110,13 +114,26 @@ impl SqliteVault {
         plaintext: &[u8],
         created_at: i64,
     ) -> Result<CellId, StoreError> {
+        self.remember_with_source(kek, plaintext, created_at, None)
+    }
+
+    /// Like [`remember_at`](Self::remember_at) but records an optional provenance `source`
+    /// string on the cell (e.g. `proxy:openai:gpt-4`, `mcp:claude`, `desktop`) — so a
+    /// memory can later answer *where it came from*.
+    pub fn remember_with_source(
+        &self,
+        kek: &Kek,
+        plaintext: &[u8],
+        created_at: i64,
+        source: Option<&str>,
+    ) -> Result<CellId, StoreError> {
         let (cell, wrapped) = kek.seal(plaintext);
         let id = CellId::of(&cell);
         let idb = id.as_bytes().as_slice();
         // Content plane: append-only (idempotent on the content-addressed id).
         self.conn.execute(
-            "INSERT OR IGNORE INTO cells (cell_id, nonce, ciphertext, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![idb, cell.nonce.as_slice(), cell.ciphertext, created_at],
+            "INSERT OR IGNORE INTO cells (cell_id, nonce, ciphertext, created_at, source) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![idb, cell.nonce.as_slice(), cell.ciphertext, created_at, source],
         )?;
         // Key plane: the only home of the wrapped DEK.
         self.conn.execute(
@@ -145,6 +162,32 @@ impl SqliteVault {
             out.push((CellId::from_bytes(arr), ts));
         }
         Ok(out)
+    }
+
+    /// The creation time (Unix seconds) of a cell, if it exists in the content plane.
+    pub fn created_at(&self, id: &CellId) -> Result<Option<i64>, StoreError> {
+        let ts: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT created_at FROM cells WHERE cell_id = ?1",
+                params![id.as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(ts)
+    }
+
+    /// The provenance `source` of a cell (where it came from), if one was recorded.
+    pub fn source(&self, id: &CellId) -> Result<Option<String>, StoreError> {
+        let s: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT source FROM cells WHERE cell_id = ?1",
+                params![id.as_bytes().as_slice()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(s.flatten())
     }
 
     /// Recall and decrypt a cell. `Ok(None)` if absent, tombstoned, or key erased.
@@ -353,6 +396,57 @@ impl SqliteVault {
         }
         Ok(ids)
     }
+
+    /// Mark a cell as *superseded*: kept and still recallable by id (and still erasable),
+    /// but hidden from quality recall because a newer version of its fact now exists.
+    pub fn mark_superseded(&self, id: &CellId) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO superseded (cell_id) VALUES (?1)",
+            params![id.as_bytes().as_slice()],
+        )?;
+        Ok(())
+    }
+
+    /// The ids of all superseded cells.
+    pub fn superseded_ids(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+        let mut stmt = self.conn.prepare("SELECT cell_id FROM superseded")?;
+        let rows = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?.as_slice().try_into().map_err(|_| StoreError::Corrupt)?);
+        }
+        Ok(out)
+    }
+
+    /// The cell currently holding the value for fact `subject`, if any.
+    pub fn subject_current(&self, subject: &str) -> Result<Option<CellId>, StoreError> {
+        let v: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT cell_id FROM fact_subjects WHERE subject = ?1",
+                params![subject],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match v {
+            Some(bytes) => {
+                let arr: [u8; 32] =
+                    bytes.as_slice().try_into().map_err(|_| StoreError::Corrupt)?;
+                Ok(Some(CellId::from_bytes(arr)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Point fact `subject` at the cell now holding its current value.
+    pub fn set_subject_current(&self, subject: &str, id: &CellId) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO fact_subjects (subject, cell_id) VALUES (?1, ?2)
+             ON CONFLICT(subject) DO UPDATE SET cell_id = excluded.cell_id",
+            params![subject, id.as_bytes().as_slice()],
+        )?;
+        Ok(())
+    }
 }
 
 /// Convert a stored blob into a 12-byte AES-GCM nonce.
@@ -388,6 +482,39 @@ mod tests {
         assert_eq!(
             vault.recall(&kek, &id).unwrap().as_deref(),
             Some(&b"persisted memory"[..])
+        );
+    }
+
+    #[test]
+    fn source_provenance_roundtrips_and_defaults_to_none() {
+        let vault = SqliteVault::open_in_memory().unwrap();
+        let kek = test_kek();
+        let tagged = vault
+            .remember_with_source(&kek, b"from claude", 100, Some("mcp:claude"))
+            .unwrap();
+        let plain = vault.remember(&kek, b"no source recorded").unwrap();
+        assert_eq!(vault.source(&tagged).unwrap().as_deref(), Some("mcp:claude"));
+        assert_eq!(
+            vault.source(&plain).unwrap(),
+            None,
+            "a memory written without a source reads back as None"
+        );
+    }
+
+    #[test]
+    fn superseded_and_subject_index_track_fact_versions() {
+        let vault = SqliteVault::open_in_memory().unwrap();
+        let kek = test_kek();
+        let old = vault.remember(&kek, b"Python").unwrap();
+        let new = vault.remember(&kek, b"Rust").unwrap();
+        vault.mark_superseded(&old).unwrap();
+        vault.set_subject_current("language", &new).unwrap();
+
+        assert_eq!(vault.superseded_ids().unwrap(), vec![*old.as_bytes()]);
+        assert_eq!(vault.subject_current("language").unwrap(), Some(new));
+        assert!(
+            vault.recall(&kek, &old).unwrap().is_some(),
+            "a superseded cell is hidden from recall but NOT erased"
         );
     }
 
