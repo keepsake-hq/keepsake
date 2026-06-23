@@ -34,7 +34,9 @@ Most "AI memory" lives on someone else's servers, tied to one vendor, readable b
 - 🔐 **Yours like a wallet.** A 24-word seed derives every key. No account, no server, no recovery-by-vendor.
 - 🧠 **Real semantic memory, fully local.** On-device embeddings (Nomic) + an in-RAM vector index. Ask "when do I fly to Berlin?" and it recalls "Berlin trip — arrive Friday" without a single exact-word match.
 - 🧨 **Cryptographic erasure that's actually final.** `forget` destroys a memory's key, not just a row — the ciphertext becomes mathematically undecryptable.
-- 🛰️ **Use it with any model.** A local OpenAI-compatible gateway (swap your `base_url`) and an MCP server for Claude / Cursor.
+- 🛰️ **Use it with any model.** A local OpenAI-compatible gateway (swap your `base_url`) and an MCP server for Claude / Cursor / Codex.
+- 🔗 **One hub, every agent.** Run the shared hub (`keepsake serve`, or just open the desktop app) and Claude, Cursor, Codex and the proxy all read/write the **same live memory** — each authenticating with a scoped capability token, never the seed. Reachable over the network (token-required) for remote/cloud agents. One-command setup: `keepsake mcp-config`.
+- 🧩 **Automatic, deduped memory.** Turns through the gateway are captured automatically; a write-time similarity guard plus a background consolidation sweep keep the store from filling with duplicates.
 - 🔭 **Post-quantum ready.** Sharing and signatures use ML-DSA-65 and an X25519 + ML-KEM-768 hybrid.
 - 🎛️ **A Privacy Dial, not a hidden switch.** Per-request: local-only · redacted-cloud · full-cloud · no-memory — every cloud disclosure writes a signed, local Memory Receipt.
 
@@ -114,7 +116,8 @@ A Rust workspace. The security-critical core is one small, auditable set of crat
 | `keepsake-vault` | Integration: semantic remember / recall / forget / share / SAIHM sharing contracts. |
 | `keepsake-firewall` | Context-Firewall: Privacy Dial, PII redaction, HMAC-chained Memory Receipts, **capability tokens**. |
 | `keepsake-proxy` | OpenAI-compatible gateway (axum) → local LLM; RAG injection + write-back; localhost-only security. |
-| `keepsake-mcp` | SAIHM tool router + MCP stdio server (Claude / Cursor) with capability-token enforcement. |
+| `keepsake-mcp` | SAIHM tool router + MCP stdio server (Claude / Cursor) with capability-token enforcement; connects to the hub or opens a local vault. |
+| `keepsake-daemon` | The shared **hub**: one unlocked vault + live index served to every client over a Unix socket (and optional TCP for remote agents) with capability-token auth; write-time dedup + background consolidation. |
 | `keepsake-sync` + `keepsake-relay` | State-based, erasure-safe snapshot sync over a dumb, **file-backed (SQLite)**, zero-knowledge HTTP relay you self-host. |
 | `keepsake-desktop-core` + `apps/desktop` | **Tauri v2** desktop app — testable command core + a local, offline, Tailwind-v4 frontend. |
 

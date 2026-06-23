@@ -29,7 +29,11 @@ now with a desktop shell:
 - **`keepsake-cli`** — `keepsake` terminal app.
 - **`keepsake-sync` + `keepsake-relay`** — encrypted snapshot sync over a dumb HTTP relay.
 - **`keepsake-desktop-core` + `apps/desktop`** — Tauri v2 desktop app: testable vault
-  commands wired to a clean, light Tailwind frontend.
+  commands wired to a clean, light Tailwind frontend; **hosts the shared hub** on unlock.
+- **`keepsake-daemon`** — the shared **hub**: one unlocked vault + live index served to all
+  clients (MCP/proxy/desktop) over a Unix socket + optional TCP (token-required for the network);
+  **write-time dedup + background consolidation** (anti-bloat); one-command onboarding
+  (`keepsake serve|token|mcp-config`); Linux binaries + Dockerfile for VPS hosting.
 
 ---
 
