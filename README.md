@@ -6,7 +6,7 @@
 
 **You own your memory like a crypto wallet — a 24-word seed, encrypted on your device, usable in front of any model.**
 
-`Apache-2.0` · no accounts · no telemetry · no cloud by default · post-quantum sharing
+`Apache-2.0` · no accounts · no telemetry · local-first · optional zero-knowledge sync · post-quantum
 
 [**Download**](https://github.com/keepsake-hq/keepsake/releases) · [**@keepsake_hq**](https://x.com/keepsake_hq)
 
@@ -36,6 +36,7 @@ Most "AI memory" lives on someone else's servers, tied to one vendor, readable b
 - 🧨 **Cryptographic erasure that's actually final.** `forget` destroys a memory's key, not just a row — the ciphertext becomes mathematically undecryptable.
 - 🛰️ **Use it with any model.** A local OpenAI-compatible gateway (swap your `base_url`) and an MCP server for Claude / Cursor / Codex.
 - 🔗 **One hub, every agent.** Run the shared hub (`keepsake serve`, or just open the desktop app) and Claude, Cursor, Codex and the proxy all read/write the **same live memory** — each authenticating with a scoped capability token, never the seed. Reachable over the network (token-required) for remote/cloud agents. One-command setup: `keepsake mcp-config`.
+- 🔄 **Same memory on all your devices — privately.** Optional encrypted sync through a **blind relay** (host your own, or point at a shared one): it stores only ciphertext keyed to an *unguessable, write-token-protected* per-vault slot, so your devices converge on one memory and nobody — not even whoever runs the relay — can read it. Local-first stays the default; sync is opt-in.
 - 🧩 **Automatic, deduped memory.** Turns through the gateway are captured automatically; a write-time similarity guard plus a background consolidation sweep keep the store from filling with duplicates.
 - 🧠 **Quality recall, not just similarity.** Recency-weighted ranking, superseded facts hidden via a bi-temporal ledger, per-memory provenance, and a **knowledge graph** (entities + relations) that surfaces connected memories a pure vector search misses.
 - ☁️ **Cloud models, on your terms.** Route a turn to an OpenAI-compatible cloud provider under the Privacy Dial — PII redacted and a signed receipt written before anything leaves; your API keys stay in your env. Local stays the default.
@@ -125,7 +126,7 @@ A Rust workspace. The security-critical core is one small, auditable set of crat
 | `keepsake-daemon` | The shared **hub**: one unlocked vault + live index served to every client over a Unix socket (and optional TCP for remote agents) with capability-token auth; write-time dedup + background consolidation. |
 | `keepsake-graph` | Knowledge graph: `(subject, relation, object)` triples distilled from memories, **erasure-aware edges** (forget cascades), graph-enriched recall. |
 | `keepsake-backup` | **OPAQUE** zero-knowledge cloud-backup core: a server validates your password & stores an encrypted backup without ever seeing the password, seed, or plaintext (Ristretto255 + Triple-DH + Argon2). |
-| `keepsake-sync` + `keepsake-relay` | State-based, erasure-safe snapshot sync over a dumb, **file-backed (SQLite)**, zero-knowledge HTTP relay you self-host. |
+| `keepsake-sync` + `keepsake-relay` | State-based, erasure-safe snapshot sync over a dumb, **file-backed (SQLite)**, zero-knowledge HTTP relay. **Multi-tenant**: one relay serves many users — each owns an unguessable, write-token-protected slot (trust-on-first-use) — self-hosted or hosted; it only ever sees ciphertext. |
 | `keepsake-desktop-core` + `apps/desktop` | **Tauri v2** desktop app — testable command core + a local, offline, Tailwind-v4 frontend. |
 
 ### How the crypto holds up

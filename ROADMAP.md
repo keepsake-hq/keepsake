@@ -32,7 +32,9 @@ portable backups, and a zero-knowledge cloud-backup core:
   optional auto-extraction of facts & graph triples; localhost P0.
 - **`keepsake-mcp`** — SAIHM tool router (8 `saihm_*` tools).
 - **`keepsake-cli`** — `keepsake` terminal app.
-- **`keepsake-sync` + `keepsake-relay`** — encrypted snapshot sync over a dumb HTTP relay.
+- **`keepsake-sync` + `keepsake-relay`** — encrypted snapshot sync over a dumb HTTP relay;
+  **multi-tenant** (one relay, many users, each owns an unguessable write-token-protected slot,
+  self-hosted or hosted) + `keepsake sync`. Local-first by default; sync is opt-in, relay stays blind.
 - **`keepsake-desktop-core` + `apps/desktop`** — Tauri v2 desktop app: testable vault
   commands wired to a clean, light Tailwind frontend; **hosts the shared hub** on unlock.
 - **`keepsake-daemon`** — the shared **hub**: one unlocked vault + live index served to all
