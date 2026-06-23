@@ -14,6 +14,7 @@ members = [
     "crates/keepsake-cli",
     "crates/keepsake-sync",
     "crates/keepsake-relay",
+    "crates/keepsake-backup",
     "crates/keepsake-desktop-core",
 ]
 

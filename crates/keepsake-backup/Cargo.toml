@@ -1,0 +1,14 @@
+[package]
+name = "keepsake-backup"
+version = "0.0.0"
+description = "Keepsake OPAQUE-authenticated zero-knowledge cloud backup: the server validates a password and stores an encrypted backup without ever seeing the password, the seed, or the plaintext."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+opaque-ke = { version = "4", features = ["ristretto255", "argon2"] }
+argon2 = "0.5"
+sha2 = "0.10"
+rand = "0.8"
+aes-gcm = "0.10"
