@@ -124,11 +124,16 @@ pub fn augment_with_memory<E: Embedder>(
     let Some(query) = last_user_message(req) else {
         return Ok(req.clone());
     };
-    let texts: Vec<String> = vault
-        .recall(kek, query, k)?
-        .into_iter()
-        .map(|(_, text)| text)
-        .collect();
+    let mut texts: Vec<String> = Vec::new();
+    // The distilled profile goes FIRST — a compact high-level overview, before specific hits,
+    // so the model reads the big picture and drills into details only as needed.
+    if let Some(profile) = vault.store().profile()? {
+        let profile = profile.trim();
+        if !profile.is_empty() {
+            texts.push(format!("User profile (high-level overview): {profile}"));
+        }
+    }
+    texts.extend(vault.recall(kek, query, k)?.into_iter().map(|(_, text)| text));
     Ok(augment_with_hits(req, &texts, auth))
 }
 
@@ -967,6 +972,31 @@ mod tests {
         assert_eq!(aug.messages[1].role, "user");
         assert!(aug.messages[1].content.contains("alpha alpha alpha"));
         assert_eq!(aug.messages[2].content, "alpha alpha alpha");
+    }
+
+    #[test]
+    fn distilled_profile_is_injected_before_specific_memories() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        vault.remember(&kek, "dentist appointment friday").unwrap();
+        vault
+            .store()
+            .set_profile("Builds Keepsake; prefers local-first.")
+            .unwrap();
+
+        let req = user_req("dentist appointment friday");
+        let aug = augment_with_memory(&vault, &kek, &req, 4, None).unwrap();
+
+        // The fenced data message carries the high-level profile FIRST, then the specific memory.
+        let data = &aug.messages[1].content;
+        let profile_pos = data.find("User profile").expect("profile is injected");
+        let memory_pos = data
+            .find("dentist appointment friday")
+            .expect("specific memory is injected");
+        assert!(
+            profile_pos < memory_pos,
+            "the high-level profile must be injected before specific memories"
+        );
     }
 
     #[test]

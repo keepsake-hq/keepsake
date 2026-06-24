@@ -114,7 +114,8 @@ impl SqliteVault {
                  valid_from  INTEGER NOT NULL DEFAULT 0,
                  valid_to    INTEGER,
                  UNIQUE(source_cell, subject, relation, object)
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS meta_text (k TEXT PRIMARY KEY, v TEXT NOT NULL);",
         )?;
         // Back-fill the column on vaults created before `created_at` existed; errors
         // (the column already exists) are expected and ignored.
@@ -280,10 +281,45 @@ impl SqliteVault {
         // Erasure cascades into the knowledge graph: drop every edge sourced from this cell.
         self.conn
             .execute("DELETE FROM edges WHERE source_cell = ?1", params![idb])?;
+        // Erasure-honest: a removed memory must not linger inside the derived profile summary.
+        self.conn
+            .execute("DELETE FROM meta_text WHERE k = 'profile'", [])?;
         // Flush committed frames into the db and truncate the WAL to zero, so the
         // pre-delete page image of the wrapped DEK does not linger on disk.
         self.conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
+    }
+
+    /// Store the distilled **profile** — a compact summary the in-loop model writes from all
+    /// memories, injected first at recall time so the agent reads the high-level picture before
+    /// drilling into specifics. A single replaceable value (not a cell): it is *derived*,
+    /// regenerable, stays local (never synced), and is encrypted at rest by SQLCipher.
+    pub fn set_profile(&self, text: &str) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO meta_text (k, v) VALUES ('profile', ?1)
+             ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            params![text],
+        )?;
+        Ok(())
+    }
+
+    /// The current distilled profile, or `None` if not yet built or cleared.
+    pub fn profile(&self) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT v FROM meta_text WHERE k = 'profile'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
+    /// Drop the distilled profile so a stale summary can't linger (also done on every `forget`).
+    pub fn clear_profile(&self) -> Result<(), StoreError> {
+        self.conn
+            .execute("DELETE FROM meta_text WHERE k = 'profile'", [])?;
         Ok(())
     }
 
@@ -587,6 +623,35 @@ mod tests {
             vault.recall(&kek, &id).unwrap().as_deref(),
             Some(&b"persisted memory"[..])
         );
+    }
+
+    #[test]
+    fn profile_roundtrips_and_forget_clears_it() {
+        let vault = SqliteVault::open_in_memory().unwrap();
+        let kek = test_kek();
+        // No distilled profile yet.
+        assert_eq!(vault.profile().unwrap(), None);
+        // Set + read back.
+        vault
+            .set_profile("Builds Keepsake; prefers local-first.")
+            .unwrap();
+        assert_eq!(
+            vault.profile().unwrap().as_deref(),
+            Some("Builds Keepsake; prefers local-first.")
+        );
+        // Erasure-honest: forgetting ANY memory drops the derived profile, so a forgotten
+        // detail can never linger inside the summary.
+        let id = vault.remember(&kek, b"a memory").unwrap();
+        vault.forget(&id).unwrap();
+        assert_eq!(
+            vault.profile().unwrap(),
+            None,
+            "forget must clear the derived profile"
+        );
+        // Explicit clear works too.
+        vault.set_profile("again").unwrap();
+        vault.clear_profile().unwrap();
+        assert_eq!(vault.profile().unwrap(), None);
     }
 
     #[test]
