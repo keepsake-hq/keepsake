@@ -15,6 +15,7 @@ use keepsake_retrieval::Embedder;
 use keepsake_vault::{MemoryVault, RecencyParams};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 
 /// One unlocked vault (+ its live index) behind a mutex, the key-encryption-key, and the
@@ -314,7 +315,8 @@ fn unix_now() -> u64 {
 /// Serve the daemon over a Unix socket: one shared vault, many local clients, newline-delimited
 /// JSON-RPC. Each connection runs concurrently and every request goes through
 /// [`DaemonState::handle`], so all clients read and write the SAME live index. The Unix socket
-/// is user-private, so an owner connection without a token is allowed.
+/// is user-private, so an owner connection without a token is allowed. Unix-only transport.
+#[cfg(unix)]
 pub async fn serve<E>(state: Arc<DaemonState<E>>, socket_path: &Path) -> std::io::Result<()>
 where
     E: Embedder + Send + Sync + 'static,
@@ -521,12 +523,14 @@ where
 /// A thin client to a running daemon over its Unix socket. MCP, proxy and desktop use this
 /// to read and write the shared vault with a scoped capability token — never the raw seed.
 /// Each call is one request/response on a fresh connection (cheap over a local socket).
+#[cfg(unix)]
 #[derive(Clone)]
 pub struct DaemonClient {
     socket_path: PathBuf,
     capability: Option<String>,
 }
 
+#[cfg(unix)]
 impl DaemonClient {
     /// Connect (per call) to the daemon at `socket_path`, as the local owner.
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {

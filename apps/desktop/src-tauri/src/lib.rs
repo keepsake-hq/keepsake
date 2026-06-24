@@ -217,11 +217,20 @@ fn unlock(
         write_token: roots.sync_write_token(),
         sync_key: roots.sync_mac_key(),
     };
-    let serve_socket = socket.clone();
+    // Host the shared hub over a Unix socket (macOS/Linux). On Windows the app + sync work the
+    // same; only local multi-agent hub hosting (Unix-socket) is unavailable for now.
+    #[cfg(unix)]
+    let daemon = {
+        let serve_socket = socket.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = keepsake_daemon::serve(daemon_state, &serve_socket).await {
+                log::error!("keepsake-daemon stopped: {e}");
+            }
+        })
+    };
+    #[cfg(not(unix))]
     let daemon = tauri::async_runtime::spawn(async move {
-        if let Err(e) = keepsake_daemon::serve(daemon_state, &serve_socket).await {
-            log::error!("keepsake-daemon stopped: {e}");
-        }
+        drop(daemon_state);
     });
 
     // Start always-on auto-sync per the saved setting (off / local-first by default).
