@@ -64,6 +64,7 @@ jobs:
 
       - name: Resolve release tag
         id: rel
+        shell: bash
         run: echo "tag=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Build & publish Keepsake (.dmg, ad-hoc signed)
@@ -147,6 +148,7 @@ jobs:
 
       - name: Resolve release tag
         id: rel
+        shell: bash
         run: echo "tag=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Build & attach Keepsake desktop (Windows / Linux)
@@ -180,6 +182,7 @@ jobs:
 
       - name: Resolve release tag
         id: rel
+        shell: bash
         run: echo "tag=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Build Linux binaries (hub + cli + proxy)
