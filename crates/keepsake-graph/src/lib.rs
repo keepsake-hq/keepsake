@@ -10,7 +10,7 @@ use keepsake_core::CellId;
 use std::collections::HashMap;
 
 /// A `(subject, relation, object)` fact distilled from a memory, e.g.
-/// `("Eduard", "uses", "Rust")`. Stored verbatim; matched case-insensitively.
+/// `("Ada", "uses", "Rust")`. Stored verbatim; matched case-insensitively.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Triple {
     pub subject: String,
@@ -155,10 +155,10 @@ mod tests {
 
     #[test]
     fn parse_triples_reads_pipe_separated_lines_and_ignores_noise() {
-        let reply = "Eduard | uses | Rust\n- Keepsake | is | sovereign\ngarbage line\nNONE\n| | |\n";
+        let reply = "Ada | uses | Rust\n- Keepsake | is | sovereign\ngarbage line\nNONE\n| | |\n";
         let triples = parse_triples(reply);
         assert_eq!(triples.len(), 2);
-        assert_eq!(triples[0], Triple::new("Eduard", "uses", "Rust"));
+        assert_eq!(triples[0], Triple::new("Ada", "uses", "Rust"));
         assert_eq!(triples[1], Triple::new("Keepsake", "is", "sovereign"));
     }
 
@@ -166,7 +166,7 @@ mod tests {
     fn index_links_entities_to_their_memories_case_insensitively() {
         let mut g = GraphIndex::new();
         g.add(cell(1), Triple::new("Apollo", "ships_in", "March"));
-        g.add(cell(2), Triple::new("Apollo", "led_by", "Eduard"));
+        g.add(cell(2), Triple::new("Apollo", "led_by", "Ada"));
 
         let mut cells = g.cells_mentioning("apollo");
         cells.sort_by_key(|c| *c.as_bytes());
@@ -175,14 +175,14 @@ mod tests {
 
         let n = g.neighbors("Apollo");
         assert!(n.contains(&("ships_in".to_string(), "March".to_string())));
-        assert!(n.contains(&("led_by".to_string(), "Eduard".to_string())));
+        assert!(n.contains(&("led_by".to_string(), "Ada".to_string())));
     }
 
     #[test]
     fn forgetting_a_cell_drops_its_edges() {
         let mut g = GraphIndex::new();
         g.add(cell(1), Triple::new("Apollo", "ships_in", "March"));
-        g.add(cell(2), Triple::new("Apollo", "led_by", "Eduard"));
+        g.add(cell(2), Triple::new("Apollo", "led_by", "Ada"));
 
         g.remove_cell(&cell(1));
         assert_eq!(g.cells_mentioning("Apollo"), vec![cell(2)]);

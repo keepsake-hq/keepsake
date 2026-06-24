@@ -692,9 +692,9 @@ mod tests {
         let vault = SqliteVault::open_in_memory().unwrap();
         let kek = test_kek();
         let a = vault.remember(&kek, b"Apollo ships in March").unwrap();
-        let b = vault.remember(&kek, b"Apollo is led by Eduard").unwrap();
+        let b = vault.remember(&kek, b"Apollo is led by Ada").unwrap();
         vault.add_edge(&a, "Apollo", "ships_in", "March", 100).unwrap();
-        vault.add_edge(&b, "Apollo", "led_by", "Eduard", 100).unwrap();
+        vault.add_edge(&b, "Apollo", "led_by", "Ada", 100).unwrap();
         vault.add_edge(&a, "Apollo", "ships_in", "March", 100).unwrap(); // idempotent
 
         assert_eq!(vault.live_edges().unwrap().len(), 2, "the duplicate edge is ignored");
@@ -702,7 +702,7 @@ mod tests {
         vault.forget(&a).unwrap();
         let edges = vault.live_edges().unwrap();
         assert_eq!(edges.len(), 1, "forgetting cell a cascades to drop its edge");
-        assert_eq!(edges[0].3, "Eduard", "only cell b's edge remains");
+        assert_eq!(edges[0].3, "Ada", "only cell b's edge remains");
     }
 
     #[test]
