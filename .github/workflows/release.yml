@@ -201,3 +201,38 @@ jobs:
           files: |
             dist/keepsake-linux-x86_64.tar.gz
             dist/keepsake-linux-x86_64.tar.gz.sha256
+
+  # Compose ONE multi-platform updater manifest from every platform's signed bundle, so Windows
+  # and Linux auto-update too — not only macOS. Runs last, after all bundles + .sig are attached.
+  # (tauri-action's cross-job latest.json merge is undocumented, so we build it deterministically:
+  # the macOS job already published latest.json with the darwin entry; here we add linux+windows.)
+  compose-updater-json:
+    needs: [release-macos, release-desktop-other]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release tag
+        id: rel
+        shell: bash
+        run: echo "tag=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Merge linux + windows into the darwin latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.rel.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/${REPO}/releases/download/${TAG}"
+          gh release download "$TAG" -R "$REPO" -p 'latest.json' -p '*.sig' -D dl --clobber
+          appimage="$(basename "$(ls dl/Keepsake_*_amd64.AppImage.sig)" .sig)"
+          winexe="$(basename "$(ls dl/Keepsake_*_x64-setup.exe.sig)" .sig)"
+          lin_sig="$(cat "dl/${appimage}.sig")"
+          win_sig="$(cat "dl/${winexe}.sig")"
+          jq \
+            --arg lin_url "${base}/${appimage}" --arg lin_sig "$lin_sig" \
+            --arg win_url "${base}/${winexe}"   --arg win_sig "$win_sig" \
+            '.platforms["linux-x86_64"]     = { signature: $lin_sig, url: $lin_url }
+             | .platforms["windows-x86_64"] = { signature: $win_sig, url: $win_url }' \
+            dl/latest.json > latest.json
+          echo "=== merged latest.json platforms ==="; jq -r '.platforms | keys[]' latest.json
+          gh release upload "$TAG" latest.json -R "$REPO" --clobber
