@@ -130,6 +130,28 @@ impl<E: Embedder> MemoryVault<E> {
         &self.store
     }
 
+    /// The most recent `limit` memories as plain text (newest first) — the input the in-loop
+    /// model distills into the profile.
+    pub fn recent_texts(&self, kek: &Kek, limit: usize) -> Result<Vec<String>, StoreError> {
+        let mut out = Vec::new();
+        for (id, _ts) in self.store.recent(limit)? {
+            if let Some(bytes) = self.store.recall(kek, &id)? {
+                out.push(String::from_utf8_lossy(&bytes).into_owned());
+            }
+        }
+        Ok(out)
+    }
+
+    /// The distilled profile (a compact, model-written overview), or `None` if not built yet.
+    pub fn profile(&self) -> Result<Option<String>, StoreError> {
+        self.store.profile()
+    }
+
+    /// Store the distilled profile.
+    pub fn set_profile(&self, text: &str) -> Result<(), StoreError> {
+        self.store.set_profile(text)
+    }
+
     /// Store `text` as an encrypted cell and index its embedding. Returns the id.
     pub fn remember(&mut self, kek: &Kek, text: &str) -> Result<CellId, StoreError> {
         let id = self.store.remember(kek, text.as_bytes())?;
@@ -569,6 +591,17 @@ mod tests {
             SqliteVault::open_in_memory().unwrap(),
             MockEmbedder::new(64),
         )
+    }
+
+    #[test]
+    fn recent_texts_returns_recent_memories_for_distillation() {
+        let mut vault = memory_vault();
+        let kek = test_kek();
+        vault.remember_at(&kek, "older note", 100).unwrap();
+        vault.remember_at(&kek, "newer note", 200).unwrap();
+        let texts = vault.recent_texts(&kek, 10).unwrap();
+        assert!(texts.iter().any(|t| t == "newer note"), "got: {texts:?}");
+        assert!(texts.iter().any(|t| t == "older note"), "got: {texts:?}");
     }
 
     #[test]

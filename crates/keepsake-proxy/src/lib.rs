@@ -114,6 +114,11 @@ pub fn augment_with_hits(
 
 /// Recall up to `k` memories for the latest user message and inject them via
 /// [`augment_with_hits`]. Passthrough if there is no user message or nothing to add.
+/// Round-robin counter that throttles automatic profile re-distillation (every Nth write-back).
+static DISTILL_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Re-distill the profile every this many write-backs (a model call is not cheap).
+const PROFILE_EVERY: u64 = 8;
+
 pub fn augment_with_memory<E: Embedder>(
     vault: &MemoryVault<E>,
     kek: &Kek,
@@ -361,17 +366,27 @@ impl MemorySource {
         match self {
             MemorySource::Local { vault, kek } => {
                 let v = vault.lock().await;
-                Ok(v.recall_with_graph(
-                    kek,
-                    query,
-                    k,
-                    now_unix() as i64,
-                    keepsake_vault::RecencyParams::default(),
-                )
-                .map_err(|e| format!("{e:?}"))?
-                .into_iter()
-                .map(|(_, text)| text)
-                .collect())
+                let mut texts: Vec<String> = Vec::new();
+                // The distilled profile leads every recall — high-level overview, then specifics.
+                if let Ok(Some(profile)) = v.profile() {
+                    let profile = profile.trim();
+                    if !profile.is_empty() {
+                        texts.push(format!("User profile (high-level overview): {profile}"));
+                    }
+                }
+                texts.extend(
+                    v.recall_with_graph(
+                        kek,
+                        query,
+                        k,
+                        now_unix() as i64,
+                        keepsake_vault::RecencyParams::default(),
+                    )
+                    .map_err(|e| format!("{e:?}"))?
+                    .into_iter()
+                    .map(|(_, text)| text),
+                );
+                Ok(texts)
             }
             MemorySource::Daemon(client) => {
                 let resp = with_cap(client, cap)
@@ -386,6 +401,44 @@ impl MemorySource {
                             .collect()
                     })
                     .unwrap_or_default())
+            }
+        }
+    }
+
+    /// The distilled profile (high-level overview), or `None` if not built yet.
+    pub async fn profile(&self, cap: Option<&str>) -> Option<String> {
+        match self {
+            MemorySource::Local { vault, .. } => vault.lock().await.profile().ok().flatten(),
+            MemorySource::Daemon(client) => with_cap(client, cap).profile().await.ok().flatten(),
+        }
+    }
+
+    /// Store the distilled profile (written by the in-loop model).
+    pub async fn set_profile(&self, text: &str, cap: Option<&str>) -> Result<(), String> {
+        match self {
+            MemorySource::Local { vault, .. } => vault
+                .lock()
+                .await
+                .set_profile(text)
+                .map_err(|e| format!("{e:?}")),
+            MemorySource::Daemon(client) => {
+                with_cap(client, cap)
+                    .set_profile(text)
+                    .await
+                    .map_err(|e| format!("daemon set_profile: {e}"))?;
+                Ok(())
+            }
+        }
+    }
+
+    /// The most recent `limit` memories as plain text — distillation input.
+    pub async fn recent_texts(&self, limit: usize, cap: Option<&str>) -> Vec<String> {
+        match self {
+            MemorySource::Local { vault, kek } => {
+                vault.lock().await.recent_texts(kek, limit).unwrap_or_default()
+            }
+            MemorySource::Daemon(client) => {
+                with_cap(client, cap).recent(limit).await.unwrap_or_default()
             }
         }
     }
@@ -683,6 +736,62 @@ async fn extract_triples(state: &AppState, model: &str, text: &str) -> Vec<keeps
     }
 }
 
+/// Clean the model's profile reply: trim, treat an empty or `NONE` answer as "no profile".
+fn parse_profile(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("NONE") {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// Distill a compact PROFILE from the user's `memories` via the in-loop upstream model (the one
+/// the user is already talking to — local or, if the egress policy already allowed this turn,
+/// cloud). Returns `None` on any error or an empty/NONE reply. Caller stores the result.
+async fn distill_profile(
+    http: reqwest::Client,
+    upstream_url: String,
+    upstream_key: Option<String>,
+    model: String,
+    memories: Vec<String>,
+) -> Option<String> {
+    if memories.is_empty() {
+        return None;
+    }
+    let joined = memories.join("\n- ");
+    let req = ChatRequest {
+        model,
+        messages: vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: "You maintain a compact PROFILE of the user from their memories. Write \
+                          3-8 short '- ' bullet points capturing stable facts, preferences, \
+                          ongoing projects, and key people/things. Be high-level; skip one-off \
+                          trivia. Output only the bullets, or exactly NONE if nothing is durable."
+                    .to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: format!("Memories:\n- {joined}\n\nWrite the profile."),
+            },
+        ],
+        stream: false,
+    };
+    let mut rb = http
+        .post(format!("{upstream_url}/v1/chat/completions"))
+        .json(&req);
+    if let Some(key) = upstream_key {
+        rb = rb.header("authorization", format!("Bearer {key}"));
+    }
+    match rb.send().await {
+        Ok(r) => {
+            let body: serde_json::Value = r.json().await.unwrap_or_default();
+            parse_profile(body["choices"][0]["message"]["content"].as_str().unwrap_or(""))
+        }
+        Err(_) => None,
+    }
+}
+
 async fn chat_completions(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -823,6 +932,31 @@ async fn chat_completions(
                     let _ = state.memory.remember(&item, cap, Some(&source)).await;
                 }
             }
+        }
+        // Opportunistically re-distill the profile from recent memories via the SAME in-loop model
+        // (opt-in KEEPSAKE_AUTO_PROFILE), every PROFILE_EVERY write-backs. Egress already passed for
+        // this turn, so reusing a cloud upstream just repeats an allowed disclosure; a receipt
+        // records it. Runs in the background so it never delays the response.
+        if std::env::var("KEEPSAKE_AUTO_PROFILE").is_ok()
+            && DISTILL_TICK
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                .is_multiple_of(PROFILE_EVERY)
+        {
+            let state2 = Arc::clone(&state);
+            let url = upstream_url.clone();
+            let key = upstream_key.clone();
+            let model = req.model.clone();
+            let cap_owned = header("x-keepsake-capability").map(str::to_string);
+            tokio::spawn(async move {
+                let mems = state2.memory.recent_texts(50, cap_owned.as_deref()).await;
+                if let Some(profile) =
+                    distill_profile(state2.http.clone(), url, key, model, mems).await
+                {
+                    let _ = state2.memory.set_profile(&profile, cap_owned.as_deref()).await;
+                    let mut r = state2.receipts.lock().await;
+                    r.append("profile_distilled", &format!("chars={}", profile.len()));
+                }
+            });
         }
     }
     {
@@ -996,6 +1130,17 @@ mod tests {
         assert!(
             profile_pos < memory_pos,
             "the high-level profile must be injected before specific memories"
+        );
+    }
+
+    #[test]
+    fn parse_profile_handles_none_and_content() {
+        assert_eq!(parse_profile("NONE"), None);
+        assert_eq!(parse_profile("  none  "), None);
+        assert_eq!(parse_profile("   "), None);
+        assert_eq!(
+            parse_profile("- builds Keepsake\n- prefers Rust").as_deref(),
+            Some("- builds Keepsake\n- prefers Rust")
         );
     }
 

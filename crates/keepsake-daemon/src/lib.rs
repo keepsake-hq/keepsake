@@ -79,6 +79,9 @@ impl<E: Embedder> DaemonState<E> {
             "vault/consolidate" => self.consolidate(id, &caller),
             "graph/add_triples" => self.graph_add_triples(id, &params, &caller),
             "graph/neighbors" => self.graph_neighbors(id, &params, &caller),
+            "vault/profile_get" => self.profile_get(id, &caller),
+            "vault/profile_set" => self.profile_set(id, &params, &caller),
+            "vault/recent" => self.recent(id, &params, &caller),
             other => rpc_error(id, -32601, &format!("method not found: {other}")),
         }
     }
@@ -153,7 +156,7 @@ impl<E: Embedder> DaemonState<E> {
         };
         match result {
             Ok(hits) => {
-                let hits: Vec<Value> = hits
+                let mut hits: Vec<Value> = hits
                     .into_iter()
                     .filter(|(_, text)| caller.permits_topic(text))
                     .map(|(cid, text)| {
@@ -165,9 +168,63 @@ impl<E: Embedder> DaemonState<E> {
                         hit
                     })
                     .collect();
+                // The distilled profile (high-level overview) leads every recall, so the model
+                // reads the big picture first and drills into specifics after.
+                if let Ok(Some(profile)) = vault.profile() {
+                    let profile = profile.trim();
+                    if !profile.is_empty() {
+                        hits.insert(
+                            0,
+                            json!({
+                                "cell_id": "profile",
+                                "text": format!("User profile (high-level overview): {profile}")
+                            }),
+                        );
+                    }
+                }
                 rpc_ok(id, json!({ "hits": hits }))
             }
             Err(e) => rpc_error(id, -32010, &format!("recall failed: {e:?}")),
+        }
+    }
+
+    /// Read the distilled profile (the model-written high-level overview). Read-scoped.
+    fn profile_get(&self, id: Value, caller: &Caller) -> Value {
+        if !caller.can_read() {
+            return rpc_error(id, -32001, "capability does not permit read");
+        }
+        let vault = self.vault.lock().expect("vault mutex poisoned");
+        match vault.profile() {
+            Ok(p) => rpc_ok(id, json!({ "profile": p })),
+            Err(e) => rpc_error(id, -32010, &format!("profile_get failed: {e:?}")),
+        }
+    }
+
+    /// Store the distilled profile (the caller's in-loop model wrote it). Write-scoped.
+    fn profile_set(&self, id: Value, params: &Value, caller: &Caller) -> Value {
+        if !caller.can_write() {
+            return rpc_error(id, -32001, "capability does not permit write");
+        }
+        let Some(text) = params.get("text").and_then(Value::as_str) else {
+            return rpc_error(id, -32602, "profile_set requires params.text (string)");
+        };
+        let vault = self.vault.lock().expect("vault mutex poisoned");
+        match vault.set_profile(text) {
+            Ok(()) => rpc_ok(id, json!({ "ok": true })),
+            Err(e) => rpc_error(id, -32010, &format!("profile_set failed: {e:?}")),
+        }
+    }
+
+    /// The most recent `limit` memories as plain text — distillation input. Read-scoped.
+    fn recent(&self, id: Value, params: &Value, caller: &Caller) -> Value {
+        if !caller.can_read() {
+            return rpc_error(id, -32001, "capability does not permit read");
+        }
+        let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(50) as usize;
+        let vault = self.vault.lock().expect("vault mutex poisoned");
+        match vault.recent_texts(&self.kek, limit) {
+            Ok(texts) => rpc_ok(id, json!({ "texts": texts })),
+            Err(e) => rpc_error(id, -32010, &format!("recent failed: {e:?}")),
         }
     }
 
@@ -556,6 +613,30 @@ impl DaemonClient {
             .await
     }
 
+    /// Read the distilled profile from the shared hub (`None` if not built yet).
+    pub async fn profile(&self) -> std::io::Result<Option<String>> {
+        let resp = self.call("vault/profile_get", json!({})).await?;
+        Ok(resp["result"]["profile"].as_str().map(str::to_string))
+    }
+
+    /// Store the distilled profile on the shared hub.
+    pub async fn set_profile(&self, text: &str) -> std::io::Result<Value> {
+        self.call("vault/profile_set", json!({ "text": text })).await
+    }
+
+    /// The most recent `limit` memories as plain text — distillation input.
+    pub async fn recent(&self, limit: usize) -> std::io::Result<Vec<String>> {
+        let resp = self.call("vault/recent", json!({ "limit": limit })).await?;
+        Ok(resp["result"]["texts"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|t| t.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
     /// Update a keyed fact; a changed value supersedes the prior one over the shared hub.
     pub async fn remember_fact(&self, subject: &str, value: &str) -> std::io::Result<Value> {
         self.call("vault/remember_fact", json!({ "subject": subject, "value": value }))
@@ -634,6 +715,23 @@ mod tests {
         let vault = MemoryVault::new(SqliteVault::open_in_memory().unwrap(), MockEmbedder::new(64));
         let cap_root = roots.capability_root();
         (DaemonState::new(vault, kek, cap_root), cap_root)
+    }
+
+    #[test]
+    fn distilled_profile_leads_recall_over_the_hub() {
+        let (state, _) = test_state();
+        let _ = state.handle(&remember_req("the sky is blue today", None));
+        let _ = state.handle(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "vault/profile_set",
+            "params": { "text": "Enjoys clear skies." }
+        }));
+        let resp = state.handle(&recall_req("the sky is blue today", 3, None));
+        let hits = resp["result"]["hits"].as_array().expect("hits array");
+        assert_eq!(hits[0]["cell_id"], "profile", "profile leads recall: {resp}");
+        assert!(hits[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("User profile"));
     }
 
     #[tokio::test]
