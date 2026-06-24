@@ -53,6 +53,14 @@ enum Cmd {
     },
     /// Print a ready-to-paste MCP config (hub socket + a fresh token) for Claude/Cursor/Codex.
     McpConfig,
+    /// Make connected agents use Keepsake as their PRIMARY memory: writes a high-priority
+    /// "Keepsake is your memory" block atop CLAUDE.md + AGENTS.md and wires the MCP tool, so an
+    /// agent always recalls from + writes to Keepsake instead of its own siloed memory.
+    Connect {
+        /// Directory to write into (default: current). Writes ./CLAUDE.md, ./AGENTS.md, ./.mcp.json.
+        #[arg(long, default_value = ".")]
+        dir: String,
+    },
     /// Export the whole vault to a portable, encrypted passport file (stays sealed to your seed).
     Export { file: String },
     /// Import a passport file into this vault (merges; your erasures always win).
@@ -210,6 +218,30 @@ fn main() {
             );
             eprintln!(
                 "\nStart the hub first:  keepsake serve\nThen paste the JSON above into your MCP client's config (e.g. Claude Desktop)."
+            );
+        }
+        Cmd::Connect { dir } => {
+            let base = std::path::Path::new(&dir);
+            let block = keepsake_instruction_block();
+            // The instruction files every agent loads first — write the block at the top.
+            for name in ["CLAUDE.md", "AGENTS.md"] {
+                let path = base.join(name);
+                let existing = std::fs::read_to_string(&path).unwrap_or_default();
+                let updated = upsert_block(&existing, &block, KEEPSAKE_BEGIN, KEEPSAKE_END);
+                std::fs::write(&path, updated)
+                    .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+                println!("✓ Keepsake memory instructions → {}", path.display());
+            }
+            // Wire the MCP tool so the agent can actually call recall/remember (merge, don't clobber).
+            let token = build_token(&cap_root(), false, false, None);
+            let mcp_path = base.join(".mcp.json");
+            let existing = std::fs::read_to_string(&mcp_path).unwrap_or_default();
+            let merged = merge_mcp_json(&existing, &socket_path().to_string_lossy(), &token);
+            std::fs::write(&mcp_path, merged)
+                .unwrap_or_else(|e| panic!("write {}: {e}", mcp_path.display()));
+            println!("✓ Keepsake MCP tool → {}", mcp_path.display());
+            eprintln!(
+                "\nNext:  keepsake serve   (start the hub)\nThen open Claude Code / Codex in this folder — Keepsake is now its primary memory."
             );
         }
         Cmd::Export { file } => {
@@ -444,6 +476,77 @@ fn build_token(cap_root: &[u8; 32], read: bool, write: bool, expires: Option<u64
     CapabilityToken::issue(cap_root, caveats).encode_hex()
 }
 
+/// Fence markers so `keepsake connect` can update its instruction block idempotently.
+const KEEPSAKE_BEGIN: &str = "<!-- KEEPSAKE:BEGIN (managed by `keepsake connect`) -->";
+const KEEPSAKE_END: &str = "<!-- KEEPSAKE:END -->";
+
+/// The high-priority instruction block that makes an agent treat Keepsake as its primary memory.
+/// Written atop CLAUDE.md / AGENTS.md, which every agent loads first.
+fn keepsake_instruction_block() -> String {
+    format!(
+        "{KEEPSAKE_BEGIN}\n\
+# Keepsake is your long-term memory\n\
+\n\
+**Keepsake is your single source of truth for durable memory** — use it instead of your own \
+session memory or scratch notes. It is owned by the user and shared across every model and \
+device they use.\n\
+\n\
+- **Before starting a task, RECALL from Keepsake**: call the `saihm_recall` tool (or run \
+`keepsake recall \"<topic>\"`) to load what is already known about the user, the project, and \
+prior decisions — before asking things you may already know.\n\
+- **Whenever you learn something durable** (a decision, preference, fact, or outcome), \
+**STORE it in Keepsake**: call `saihm_remember` (or run `keepsake remember \"<fact>\"`). Write \
+as you go, not only at the end.\n\
+- **Prefer Keepsake over your built-in memory** for anything that should survive across \
+sessions, models, or machines. If they disagree, Keepsake wins.\n\
+\n\
+_Managed by `keepsake connect` — change Keepsake's settings, not these lines._\n\
+{KEEPSAKE_END}"
+    )
+}
+
+/// Idempotently place `block` (fenced by `begin`/`end`) at the TOP of `existing`: replace an
+/// existing fenced block in place, else prepend it. Re-running never duplicates the block.
+fn upsert_block(existing: &str, block: &str, begin: &str, end: &str) -> String {
+    let body = match (existing.find(begin), existing.find(end)) {
+        (Some(b), Some(e)) if e > b => {
+            format!("{}{}", &existing[..b], &existing[e + end.len()..])
+        }
+        _ => existing.to_string(),
+    };
+    let body = body.trim();
+    if body.is_empty() {
+        format!("{block}\n")
+    } else {
+        format!("{block}\n\n{body}\n")
+    }
+}
+
+/// Merge the keepsake MCP server into an existing `.mcp.json` (or start a fresh one), preserving
+/// any other servers the user already configured.
+fn merge_mcp_json(existing: &str, socket: &str, token: &str) -> String {
+    let mut root: serde_json::Value =
+        serde_json::from_str(existing).unwrap_or_else(|_| serde_json::json!({}));
+    if !root.is_object() {
+        root = serde_json::json!({});
+    }
+    let servers = root
+        .as_object_mut()
+        .unwrap()
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(map) = servers.as_object_mut() {
+        map.insert(
+            "keepsake".to_string(),
+            serde_json::json!({
+                "command": "keepsake-mcp",
+                "env": { "KEEPSAKE_SOCKET": socket, "KEEPSAKE_CAPABILITY": token }
+            }),
+        );
+    }
+    serde_json::to_string_pretty(&root).unwrap_or_default()
+}
+
 /// A ready-to-paste MCP server config wiring the keepsake MCP shim to the hub `socket` with a
 /// scoped `token` — so an agent connects to the shared vault without ever seeing the seed.
 fn mcp_config_json(socket: &str, token: &str) -> String {
@@ -534,6 +637,41 @@ mod tests {
         let r = root();
         let a = authz(&build_token(&r, true, false, Some(100)), &r);
         assert!(!a.is_expired(50) && a.is_expired(200));
+    }
+
+    #[test]
+    fn upsert_block_prepends_then_replaces_idempotently() {
+        let block = format!("{KEEPSAKE_BEGIN}\nHELLO\n{KEEPSAKE_END}");
+        // Into an empty file.
+        let a = upsert_block("", &block, KEEPSAKE_BEGIN, KEEPSAKE_END);
+        assert!(a.starts_with(KEEPSAKE_BEGIN));
+        // Into existing content → block on top, the user's content kept below.
+        let b = upsert_block("# My project\nnotes", &block, KEEPSAKE_BEGIN, KEEPSAKE_END);
+        assert!(b.starts_with(KEEPSAKE_BEGIN));
+        assert!(b.contains("# My project"));
+        // Re-running is idempotent — exactly one block, identical output.
+        let c = upsert_block(&b, &block, KEEPSAKE_BEGIN, KEEPSAKE_END);
+        assert_eq!(b, c, "upsert must be idempotent");
+        assert_eq!(c.matches(KEEPSAKE_BEGIN).count(), 1);
+    }
+
+    #[test]
+    fn instruction_block_tells_the_agent_to_recall_and_store() {
+        let b = keepsake_instruction_block();
+        assert!(b.contains("saihm_recall"));
+        assert!(b.contains("saihm_remember"));
+        assert!(b.contains("single source of truth"));
+        assert!(b.starts_with(KEEPSAKE_BEGIN) && b.ends_with(KEEPSAKE_END));
+    }
+
+    #[test]
+    fn merge_mcp_json_adds_keepsake_and_keeps_other_servers() {
+        let fresh = merge_mcp_json("", "/sock", "tok");
+        assert!(fresh.contains("keepsake") && fresh.contains("/sock"));
+        let existing = r#"{"mcpServers":{"other":{"command":"x"}}}"#;
+        let merged = merge_mcp_json(existing, "/sock", "tok");
+        assert!(merged.contains("\"other\""), "other server preserved: {merged}");
+        assert!(merged.contains("\"keepsake\""));
     }
 
     #[test]
