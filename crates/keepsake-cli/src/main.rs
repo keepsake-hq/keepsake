@@ -61,6 +61,12 @@ enum Cmd {
         #[arg(long, default_value = ".")]
         dir: String,
     },
+    /// (internal) Claude Code SessionStart hook — prints recalled memory as injected context.
+    #[command(hide = true)]
+    RecallHook,
+    /// (internal) Claude Code Stop hook — stores the last user turn from the transcript.
+    #[command(hide = true)]
+    RememberHook,
     /// Export the whole vault to a portable, encrypted passport file (stays sealed to your seed).
     Export { file: String },
     /// Import a passport file into this vault (merges; your erasures always win).
@@ -240,9 +246,80 @@ fn main() {
             std::fs::write(&mcp_path, merged)
                 .unwrap_or_else(|e| panic!("write {}: {e}", mcp_path.display()));
             println!("✓ Keepsake MCP tool → {}", mcp_path.display());
-            eprintln!(
-                "\nNext:  keepsake serve   (start the hub)\nThen open Claude Code / Codex in this folder — Keepsake is now its primary memory."
+            // Hard guarantee for Claude Code: harness-run hooks that auto-LOAD memory on session
+            // start and auto-STORE the user's turn on stop — no model cooperation required. They
+            // talk to the hub seedlessly with a scoped capability token.
+            let socket = socket_path().to_string_lossy().to_string();
+            let recall_cmd = format!(
+                "KEEPSAKE_SOCKET=\"{socket}\" KEEPSAKE_CAPABILITY=\"{token}\" keepsake recall-hook"
             );
+            let remember_cmd = format!(
+                "KEEPSAKE_SOCKET=\"{socket}\" KEEPSAKE_CAPABILITY=\"{token}\" keepsake remember-hook"
+            );
+            let settings_path = base.join(".claude").join("settings.local.json");
+            let settings_existing = std::fs::read_to_string(&settings_path).unwrap_or_default();
+            let s1 = upsert_hook(
+                &settings_existing,
+                "SessionStart",
+                Some("startup|resume"),
+                &recall_cmd,
+                "keepsake recall-hook",
+                false,
+            );
+            let s2 = upsert_hook(&s1, "Stop", None, &remember_cmd, "keepsake remember-hook", true);
+            if let Some(parent) = settings_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(&settings_path, s2)
+                .unwrap_or_else(|e| panic!("write {}: {e}", settings_path.display()));
+            println!(
+                "✓ Keepsake auto-load + auto-store hooks → {} (personal; holds a local-only token — don't commit)",
+                settings_path.display()
+            );
+            eprintln!(
+                "\nNext:  keepsake serve   (start the hub)\nThen open Claude Code here — it now auto-loads from + auto-writes to Keepsake every session.\n(Codex/Cursor get the always-read instruction block; the deterministic hooks are Claude Code-specific.)"
+            );
+        }
+        Cmd::RecallHook => {
+            // SessionStart: ignore the stdin payload, pull memory from the hub, inject it as context.
+            let _ = read_stdin();
+            let socket = socket_path().to_string_lossy().to_string();
+            let cap = std::env::var("KEEPSAKE_CAPABILITY").ok();
+            let ctx = run_async(async move {
+                let mut client = keepsake_daemon::DaemonClient::new(socket);
+                if let Some(c) = cap {
+                    client = client.with_capability(c);
+                }
+                let profile = client.profile().await.ok().flatten();
+                let recent = client.recent(8).await.unwrap_or_default();
+                session_start_context(profile.as_deref(), &recent)
+            });
+            let out = serde_json::json!({
+                "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": ctx }
+            });
+            println!("{}", serde_json::to_string(&out).unwrap_or_default());
+        }
+        Cmd::RememberHook => {
+            // Stop: read the transcript named on stdin, store the last substantive user turn.
+            let input = read_stdin();
+            let text = (|| {
+                let v: serde_json::Value = serde_json::from_str(&input).ok()?;
+                let path = v.get("transcript_path")?.as_str()?;
+                let jsonl = std::fs::read_to_string(path).ok()?;
+                last_user_text_from_transcript(&jsonl)
+            })();
+            // Skip trivial acknowledgements ("ok", "ja"); the hub dedups the rest.
+            if let Some(text) = text.filter(|t| t.chars().count() >= 20) {
+                let socket = socket_path().to_string_lossy().to_string();
+                let cap = std::env::var("KEEPSAKE_CAPABILITY").ok();
+                run_async(async move {
+                    let mut client = keepsake_daemon::DaemonClient::new(socket);
+                    if let Some(c) = cap {
+                        client = client.with_capability(c);
+                    }
+                    let _ = client.remember_with_source(&text, "claude-code").await;
+                });
+            }
         }
         Cmd::Export { file } => {
             let (vault, _kek) = load();
@@ -547,6 +624,135 @@ fn merge_mcp_json(existing: &str, socket: &str, token: &str) -> String {
     serde_json::to_string_pretty(&root).unwrap_or_default()
 }
 
+/// Read all of stdin to a String (hooks receive their payload there).
+fn read_stdin() -> String {
+    use std::io::Read;
+    let mut s = String::new();
+    let _ = std::io::stdin().read_to_string(&mut s);
+    s
+}
+
+/// The markdown the SessionStart hook injects so the model loads Keepsake memory before acting:
+/// the distilled profile first (the pyramid's overview), then a few recent memories.
+fn session_start_context(profile: Option<&str>, recent: &[String]) -> String {
+    let has_profile = profile.map(|p| !p.trim().is_empty()).unwrap_or(false);
+    if !has_profile && recent.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from("# Your Keepsake memory (consult this before acting)\n");
+    if let Some(p) = profile {
+        if !p.trim().is_empty() {
+            s.push_str("\n## Profile\n");
+            s.push_str(p.trim());
+            s.push('\n');
+        }
+    }
+    if !recent.is_empty() {
+        s.push_str("\n## Recent memories\n");
+        for m in recent {
+            s.push_str("- ");
+            s.push_str(m.trim());
+            s.push('\n');
+        }
+    }
+    s
+}
+
+/// Extract the last user-message text from a Claude Code transcript (JSONL: one object per line;
+/// user lines are `{"type":"user","message":{"role":"user","content": <string|parts[]>}}`).
+fn last_user_text_from_transcript(jsonl: &str) -> Option<String> {
+    let mut last = None;
+    for line in jsonl.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("user") {
+            continue;
+        }
+        let Some(content) = v.get("message").and_then(|m| m.get("content")) else {
+            continue;
+        };
+        let text = match content {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Array(parts) => parts
+                .iter()
+                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => continue,
+        };
+        let text = text.trim().to_string();
+        if !text.is_empty() {
+            last = Some(text);
+        }
+    }
+    last
+}
+
+/// Idempotently register a command hook for `event` in a Claude Code settings JSON: drop any prior
+/// Keepsake hook (identified by `marker` in its command) and append the new one — re-running never
+/// duplicates it, and the user's own hooks are preserved.
+fn upsert_hook(
+    settings_json: &str,
+    event: &str,
+    matcher: Option<&str>,
+    command: &str,
+    marker: &str,
+    run_async: bool,
+) -> String {
+    let mut root: serde_json::Value =
+        serde_json::from_str(settings_json).unwrap_or_else(|_| serde_json::json!({}));
+    if !root.is_object() {
+        root = serde_json::json!({});
+    }
+    let hooks = root
+        .as_object_mut()
+        .unwrap()
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}));
+    if !hooks.is_object() {
+        *hooks = serde_json::json!({});
+    }
+    let arr = hooks
+        .as_object_mut()
+        .unwrap()
+        .entry(event.to_string())
+        .or_insert_with(|| serde_json::json!([]));
+    let mut groups: Vec<serde_json::Value> = arr.as_array().cloned().unwrap_or_default();
+    groups.retain(|g| {
+        !g.get("hooks")
+            .and_then(|h| h.as_array())
+            .map(|hs| {
+                hs.iter().any(|h| {
+                    h.get("command")
+                        .and_then(|c| c.as_str())
+                        .map(|c| c.contains(marker))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    });
+    let mut inner = serde_json::Map::new();
+    inner.insert("type".into(), serde_json::json!("command"));
+    inner.insert("command".into(), serde_json::json!(command));
+    if run_async {
+        inner.insert("async".into(), serde_json::json!(true));
+    }
+    inner.insert("timeout".into(), serde_json::json!(30));
+    let mut group = serde_json::Map::new();
+    if let Some(m) = matcher {
+        group.insert("matcher".into(), serde_json::json!(m));
+    }
+    group.insert("hooks".into(), serde_json::json!([inner]));
+    groups.push(serde_json::Value::Object(group));
+    *arr = serde_json::json!(groups);
+    serde_json::to_string_pretty(&root).unwrap_or_default()
+}
+
 /// A ready-to-paste MCP server config wiring the keepsake MCP shim to the hub `socket` with a
 /// scoped `token` — so an agent connects to the shared vault without ever seeing the seed.
 fn mcp_config_json(socket: &str, token: &str) -> String {
@@ -672,6 +878,59 @@ mod tests {
         let merged = merge_mcp_json(existing, "/sock", "tok");
         assert!(merged.contains("\"other\""), "other server preserved: {merged}");
         assert!(merged.contains("\"keepsake\""));
+    }
+
+    #[test]
+    fn session_start_context_lists_profile_then_recent() {
+        assert_eq!(session_start_context(None, &[]), "");
+        let c = session_start_context(Some("User ships Rust crates."), &["prefers TDD".to_string()]);
+        assert!(c.contains("Profile") && c.contains("User ships Rust crates."));
+        assert!(c.contains("- prefers TDD"));
+    }
+
+    #[test]
+    fn last_user_text_picks_the_final_user_message() {
+        let jsonl = concat!(
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"first question\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer\"}]}}\n",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"second and final question\"}}\n",
+        );
+        assert_eq!(
+            last_user_text_from_transcript(jsonl).as_deref(),
+            Some("second and final question")
+        );
+        let arr = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi there friend\"}]}}";
+        assert_eq!(last_user_text_from_transcript(arr).as_deref(), Some("hi there friend"));
+        assert_eq!(last_user_text_from_transcript("garbage\n\n"), None);
+    }
+
+    #[test]
+    fn upsert_hook_is_idempotent_and_preserves_others() {
+        let pre = r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo other"}]}]}}"#;
+        let a = upsert_hook(
+            pre,
+            "SessionStart",
+            Some("startup"),
+            "keepsake recall-hook",
+            "keepsake recall-hook",
+            false,
+        );
+        assert!(a.contains("echo other"), "preserves the user's own hook");
+        assert!(a.contains("keepsake recall-hook"));
+        let b = upsert_hook(
+            &a,
+            "SessionStart",
+            Some("startup"),
+            "keepsake recall-hook",
+            "keepsake recall-hook",
+            false,
+        );
+        assert_eq!(
+            b.matches("keepsake recall-hook").count(),
+            1,
+            "no duplicate keepsake hook on re-run"
+        );
+        assert!(b.contains("echo other"));
     }
 
     #[test]
