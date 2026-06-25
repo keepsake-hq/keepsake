@@ -12,6 +12,7 @@ keepsake-core = { path = "../keepsake-core" }
 keepsake-store-sqlite = { path = "../keepsake-store-sqlite" }
 keepsake-retrieval = { path = "../keepsake-retrieval" }
 keepsake-graph = { path = "../keepsake-graph" }
+hex = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

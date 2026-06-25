@@ -143,6 +143,18 @@ impl GraphIndex {
     pub fn all_edges(&self) -> &[(CellId, Triple)] {
         &self.edges
     }
+
+    /// The edges whose source cell is in `cells` — the query-relevant region of the graph. Used to
+    /// render a compact "map" (structure first) instead of injecting full memory texts: callers
+    /// pick the relevant cells (e.g. via vector recall), then show their triples with cell ids the
+    /// model can fetch full text by, on demand.
+    pub fn subgraph(&self, cells: &[CellId]) -> Vec<(CellId, Triple)> {
+        self.edges
+            .iter()
+            .filter(|(c, _)| cells.contains(c))
+            .cloned()
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -204,5 +216,23 @@ mod tests {
         cells.sort_by_key(|c| *c.as_bytes());
         assert_eq!(cells, vec![cell(1), cell(2)], "both Apollo memories, not Zephyr");
         assert!(g.cells_for_text("nothing pertinent stated").is_empty());
+    }
+
+    #[test]
+    fn subgraph_returns_only_edges_backed_by_the_requested_cells() {
+        let mut g = GraphIndex::new();
+        g.add(cell(1), Triple::new("Apollo", "ships_in", "March"));
+        g.add(cell(2), Triple::new("Apollo", "led_by", "Ada"));
+        g.add(cell(3), Triple::new("Zephyr", "is", "unrelated"));
+
+        let sub = g.subgraph(&[cell(1), cell(3)]);
+        assert_eq!(sub.len(), 2);
+        assert!(sub.iter().any(|(c, t)| *c == cell(1) && t.object == "March"));
+        assert!(sub.iter().any(|(c, t)| *c == cell(3) && t.subject == "Zephyr"));
+        assert!(
+            !sub.iter().any(|(c, _)| *c == cell(2)),
+            "cell 2 was not requested"
+        );
+        assert!(g.subgraph(&[]).is_empty(), "no cells → empty subgraph");
     }
 }

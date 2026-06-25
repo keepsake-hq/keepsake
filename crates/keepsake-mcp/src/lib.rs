@@ -12,11 +12,14 @@ use keepsake_retrieval::Embedder;
 use keepsake_vault::MemoryVault;
 use serde_json::{json, Value};
 
-/// The eight SAIHM tools. Governance tools are present for spec compatibility but
-/// disabled in the chain-free local profile.
-pub const SAIHM_TOOLS: [&str; 8] = [
+/// The SAIHM tools plus Keepsake's compact symbol-graph recall (`saihm_recall_map` /
+/// `saihm_recall_cell`). Governance tools are present for spec compatibility but disabled in the
+/// chain-free local profile.
+pub const SAIHM_TOOLS: [&str; 10] = [
     "saihm_remember",
     "saihm_recall",
+    "saihm_recall_map",
+    "saihm_recall_cell",
     "saihm_forget",
     "saihm_status",
     "saihm_share",
@@ -89,6 +92,26 @@ impl<E: Embedder> ToolRouter<E> {
                             .map(|(id, text)| json!({"cell_id": cell_id_hex(id), "text": text}))
                             .collect::<Vec<_>>()
                     }),
+                    Err(_) => json!({"error": "store failure"}),
+                }
+            }
+            "saihm_recall_map" => {
+                let query = args["query"].as_str().unwrap_or("");
+                let k = args["k"].as_u64().unwrap_or(8) as usize;
+                match self.vault.recall_map(&self.kek, query, k) {
+                    Ok(map) => json!({"map": map}),
+                    Err(_) => json!({"error": "store failure"}),
+                }
+            }
+            "saihm_recall_cell" => {
+                let Some(s) = args["cell_id"].as_str() else {
+                    return json!({"error": "missing 'cell_id'"});
+                };
+                let Some(id) = parse_cell_id(s) else {
+                    return json!({"error": "invalid 'cell_id'"});
+                };
+                match self.vault.get_cell(&self.kek, &id) {
+                    Ok(text) => json!({"text": text}),
                     Err(_) => json!({"error": "store failure"}),
                 }
             }
@@ -224,7 +247,9 @@ impl<E: Embedder> ToolBackend for ToolRouter<E> {
 /// write does not imply read.
 fn auth_allows_tool(auth: &Authorization, tool: &str) -> bool {
     match tool {
-        "saihm_recall" | "saihm_status" => auth.allows_read(),
+        "saihm_recall" | "saihm_recall_map" | "saihm_recall_cell" | "saihm_status" => {
+            auth.allows_read()
+        }
         "saihm_remember" => auth.allows_write(),
         _ => auth.allows_admin(),
     }
@@ -257,6 +282,8 @@ fn tool_definitions() -> Vec<Value> {
     vec![
         json!({"name":"saihm_remember","description":"Store a memory.","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}),
         json!({"name":"saihm_recall","description":"Semantic recall of stored memories.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"k":{"type":"integer"}},"required":["query"]}}),
+        json!({"name":"saihm_recall_map","description":"Compact symbol-graph recall: a terse map of the query-relevant entities and relations, each tagged with a cell id. Read it first, then fetch only the nodes you need via saihm_recall_cell — far fewer tokens than recalling full texts.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"k":{"type":"integer"}},"required":["query"]}}),
+        json!({"name":"saihm_recall_cell","description":"Fetch one memory's full text by its cell id — the on-demand expansion of a saihm_recall_map entry.","inputSchema":{"type":"object","properties":{"cell_id":{"type":"string"}},"required":["cell_id"]}}),
         json!({"name":"saihm_forget","description":"Cryptographically erase a memory by cell id.","inputSchema":{"type":"object","properties":{"cell_id":{"type":"string"}},"required":["cell_id"]}}),
         json!({"name":"saihm_status","description":"Vault and protocol status.","inputSchema":{"type":"object"}}),
     ]
@@ -411,6 +438,17 @@ async fn daemon_call(client: &DaemonClient, tool: &str, args: &Value) -> std::io
                 )
                 .await
         }
+        "saihm_recall_map" => Ok(json!({ "result": {
+            "map": client
+                .recall_map(
+                    args["query"].as_str().unwrap_or(""),
+                    args["k"].as_u64().unwrap_or(8) as usize,
+                )
+                .await?
+        } })),
+        "saihm_recall_cell" => Ok(json!({ "result": {
+            "text": client.get_cell(args["cell_id"].as_str().unwrap_or("")).await?
+        } })),
         "saihm_forget" => client.forget(args["cell_id"].as_str().unwrap_or("")).await,
         "saihm_status" => client.status().await,
         other => Ok(json!({ "error": { "message": format!("unknown tool: {other}") } })),
@@ -465,6 +503,39 @@ mod tests {
             &json!({"query": "alpha alpha alpha", "k": 1}),
         );
         assert_eq!(rec["hits"][0]["text"], "alpha alpha alpha");
+    }
+
+    #[test]
+    fn recall_map_and_recall_cell_tools_round_trip() {
+        let roots = RootKeys::from_mnemonic(TEST_MNEMONIC, "").unwrap();
+        let kek = Kek::from_root(&roots.encryption_root);
+        let mut vault =
+            MemoryVault::new(SqliteVault::open_in_memory().unwrap(), MockEmbedder::new(64));
+        let text = "Apollo is the secret flagship launching March 14";
+        let cell = vault.remember(&kek, text).unwrap();
+        vault
+            .add_triples(
+                &cell,
+                &[keepsake_vault::Triple::new("Apollo", "launches_on", "March 14")],
+                1_000,
+            )
+            .unwrap();
+        let mut router = ToolRouter::new(vault, kek, roots.capability_root());
+
+        // saihm_recall_map → compact map: relation + cell id, NOT the full prose.
+        let m = router.dispatch("saihm_recall_map", &json!({"query": text, "k": 5}));
+        let map = m["map"].as_str().expect("map string");
+        assert!(map.contains("launches_on"), "map carries the relation: {m}");
+        assert!(map.contains(&cell_id_hex(&cell)), "map tags the edge with its id");
+        assert!(!map.contains("secret flagship"), "map omits the full text");
+
+        // saihm_recall_cell → the full text by id.
+        let g = router.dispatch("saihm_recall_cell", &json!({"cell_id": cell_id_hex(&cell)}));
+        assert_eq!(g["text"], text);
+
+        // Both tools are advertised.
+        assert!(SAIHM_TOOLS.contains(&"saihm_recall_map"));
+        assert!(SAIHM_TOOLS.contains(&"saihm_recall_cell"));
     }
 
     #[test]

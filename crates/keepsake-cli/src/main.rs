@@ -35,6 +35,15 @@ enum Cmd {
     },
     /// Cryptographically erase a memory by its cell id (hex).
     Forget { cell_id: String },
+    /// Compact symbol-graph recall: print a terse map (entities + relations, each with a cell id)
+    /// of the query-relevant region — then expand a node's full text with `keepsake get <id>`.
+    Map {
+        query: String,
+        #[arg(long, default_value_t = 8)]
+        k: usize,
+    },
+    /// Print one memory's full text by its cell id (the on-demand expansion of a map entry).
+    Get { cell_id: String },
     /// Show vault status.
     Status,
     /// Run the shared memory hub (daemon) so every agent connects to ONE live vault.
@@ -191,6 +200,29 @@ fn main() {
             let arr: [u8; 32] = bytes.try_into().expect("cell id must be 32 bytes");
             vault.forget(&CellId::from_bytes(arr)).expect("forget");
             println!("forgotten {cell_id}");
+        }
+        Cmd::Map { query, k } => {
+            let (vault, kek) = load();
+            let map = vault.recall_map(&kek, &query, k).expect("recall map");
+            if map.is_empty() {
+                eprintln!(
+                    "(no graph edges for that query — populate the graph with KEEPSAKE_AUTO_GRAPH=1, or use `keepsake recall`)"
+                );
+            } else {
+                print!("{map}");
+            }
+        }
+        Cmd::Get { cell_id } => {
+            let (vault, kek) = load();
+            let bytes = hex::decode(&cell_id).expect("cell id must be hex");
+            let arr: [u8; 32] = bytes.try_into().expect("cell id must be 32 bytes");
+            match vault
+                .get_cell(&kek, &CellId::from_bytes(arr))
+                .expect("get cell")
+            {
+                Some(text) => println!("{text}"),
+                None => eprintln!("(no such memory — it may have been forgotten)"),
+            }
         }
         Cmd::Status => {
             let (vault, _kek) = load();

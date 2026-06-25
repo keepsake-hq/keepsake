@@ -2049,6 +2049,7 @@ dependencies = [
 name = "keepsake-vault"
 version = "0.0.0"
 dependencies = [
+ "hex",
  "keepsake-core",
  "keepsake-crypto",
  "keepsake-graph",

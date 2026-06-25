@@ -79,6 +79,8 @@ impl<E: Embedder> DaemonState<E> {
             "vault/consolidate" => self.consolidate(id, &caller),
             "graph/add_triples" => self.graph_add_triples(id, &params, &caller),
             "graph/neighbors" => self.graph_neighbors(id, &params, &caller),
+            "graph/map" => self.graph_map(id, &params, &caller),
+            "vault/get" => self.vault_get(id, &params, &caller),
             "vault/profile_get" => self.profile_get(id, &caller),
             "vault/profile_set" => self.profile_set(id, &params, &caller),
             "vault/recent" => self.recent(id, &params, &caller),
@@ -315,6 +317,44 @@ impl<E: Embedder> DaemonState<E> {
             .map(|(relation, entity)| json!({ "relation": relation, "entity": entity }))
             .collect();
         rpc_ok(id, json!({ "neighbors": neighbors }))
+    }
+
+    /// Compact symbol-graph recall: the query-relevant region of the graph as a terse map (triples
+    /// + backing cell ids), instead of full memory texts. Read-scoped; record limits clamp `k`.
+    fn graph_map(&self, id: Value, params: &Value, caller: &Caller) -> Value {
+        if !caller.can_read() {
+            return rpc_error(id, -32001, "capability does not permit read");
+        }
+        let Some(query) = params.get("query").and_then(Value::as_str) else {
+            return rpc_error(id, -32602, "graph/map requires params.query (string)");
+        };
+        let k = params.get("k").and_then(Value::as_u64).unwrap_or(8) as usize;
+        let k = caller.clamp_records(k);
+        let vault = self.vault.lock().expect("vault mutex poisoned");
+        match vault.recall_map(&self.kek, query, k) {
+            Ok(map) => rpc_ok(id, json!({ "map": map })),
+            Err(e) => rpc_error(id, -32010, &format!("graph/map failed: {e:?}")),
+        }
+    }
+
+    /// The full plaintext of one memory by cell id — the on-demand fetch behind a map entry.
+    /// Read-scoped. A forgotten or absent id returns `text: null`, so erasure stays honest.
+    fn vault_get(&self, id: Value, params: &Value, caller: &Caller) -> Value {
+        if !caller.can_read() {
+            return rpc_error(id, -32001, "capability does not permit read");
+        }
+        let Some(cell_id) = params
+            .get("cell_id")
+            .and_then(Value::as_str)
+            .and_then(decode_cell_id)
+        else {
+            return rpc_error(id, -32602, "vault/get requires params.cell_id (32-byte hex)");
+        };
+        let vault = self.vault.lock().expect("vault mutex poisoned");
+        match vault.get_cell(&self.kek, &cell_id) {
+            Ok(text) => rpc_ok(id, json!({ "text": text })),
+            Err(e) => rpc_error(id, -32010, &format!("vault/get failed: {e:?}")),
+        }
     }
 }
 
@@ -663,6 +703,21 @@ impl DaemonClient {
         self.call("graph/neighbors", json!({ "entity": entity })).await
     }
 
+    /// Compact symbol-graph recall: a terse map of the query-relevant region (structure, not texts).
+    pub async fn recall_map(&self, query: &str, k: usize) -> std::io::Result<String> {
+        let resp = self.call("graph/map", json!({ "query": query, "k": k })).await?;
+        Ok(resp["result"]["map"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string())
+    }
+
+    /// The full text of one memory by cell id — the on-demand fetch behind a map entry.
+    pub async fn get_cell(&self, cell_id_hex: &str) -> std::io::Result<Option<String>> {
+        let resp = self.call("vault/get", json!({ "cell_id": cell_id_hex })).await?;
+        Ok(resp["result"]["text"].as_str().map(str::to_string))
+    }
+
     pub async fn recall(&self, query: &str, k: usize) -> std::io::Result<Value> {
         self.call("vault/recall", json!({ "query": query, "k": k })).await
     }
@@ -732,6 +787,36 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("User profile"));
+    }
+
+    #[test]
+    fn graph_map_compresses_and_vault_get_fetches_over_the_hub() {
+        let (state, _) = test_state();
+        let text = "Apollo is the secret flagship launching March 14";
+        let r = state.handle(&remember_req(text, None));
+        let cell = r["result"]["cell_id"].as_str().expect("cell_id").to_string();
+        let _ = state.handle(&json!({
+            "jsonrpc": "2.0", "id": 1, "method": "graph/add_triples",
+            "params": { "cell_id": cell, "triples": [
+                {"subject": "Apollo", "relation": "launches_on", "object": "March 14"}
+            ] }
+        }));
+
+        // graph/map → a compact map with the relation + the backing cell id, but NOT the full text.
+        let m = state.handle(&json!({
+            "jsonrpc": "2.0", "id": 2, "method": "graph/map",
+            "params": { "query": text, "k": 5 }
+        }));
+        let map = m["result"]["map"].as_str().expect("map string");
+        assert!(map.contains("launches_on"), "map carries the relation: {m}");
+        assert!(map.contains(&cell), "map tags the edge with its cell id");
+        assert!(!map.contains("secret flagship"), "map omits the full memory text");
+
+        // vault/get → the full text by id; a forgotten id returns null.
+        let g = state.handle(&json!({
+            "jsonrpc": "2.0", "id": 3, "method": "vault/get", "params": { "cell_id": cell }
+        }));
+        assert_eq!(g["result"]["text"].as_str(), Some(text));
     }
 
     #[tokio::test]

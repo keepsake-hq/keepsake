@@ -111,6 +111,25 @@ pub struct MemoryVault<E: Embedder> {
     graph: GraphIndex,
 }
 
+/// Render graph edges as a compact map: one `[id] subject --relation--> object` line per edge.
+/// No full memory text — that is fetched on demand by id. Empty input → empty string.
+fn format_map(edges: &[(CellId, Triple)]) -> String {
+    if edges.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from("# Memory map — fetch a node's full text by its id\n");
+    for (cell, t) in edges {
+        s.push_str(&format!(
+            "[{}] {} --{}--> {}\n",
+            hex::encode(cell.as_bytes()),
+            t.subject,
+            t.relation,
+            t.object
+        ));
+    }
+    s
+}
+
 impl<E: Embedder> MemoryVault<E> {
     /// Wrap a store and embedder. The in-RAM index starts empty; call
     /// [`MemoryVault::rebuild_index`] to populate it from persisted content.
@@ -224,6 +243,29 @@ impl<E: Embedder> MemoryVault<E> {
             }
         }
         Ok(out)
+    }
+
+    /// Compact "symbol-graph" recall: the query-relevant region of the knowledge graph as a terse
+    /// map (entities + relations, each tagged with the backing cell id) **instead of** the full
+    /// memory texts. Picks the cells most relevant to `query` (top-`k`), then renders their triples
+    /// — the model reads the structure cheaply and fetches a node's full text by id on demand via
+    /// [`MemoryVault::get_cell`]. Empty when no relevant edges exist.
+    pub fn recall_map(&self, kek: &Kek, query: &str, k: usize) -> Result<String, StoreError> {
+        let cells: Vec<CellId> = self
+            .recall(kek, query, k)?
+            .into_iter()
+            .map(|(c, _)| c)
+            .collect();
+        Ok(format_map(&self.graph.subgraph(&cells)))
+    }
+
+    /// The full plaintext of a single memory by cell id — the on-demand fetch behind a map entry.
+    /// `None` if the cell is absent or was forgotten (its key is gone), so erasure stays honest.
+    pub fn get_cell(&self, kek: &Kek, id: &CellId) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .store
+            .recall(kek, id)?
+            .and_then(|bytes| String::from_utf8(bytes).ok()))
     }
 
     /// Like [`MemoryVault::remember`] but with an explicit creation time (Unix seconds);
@@ -743,6 +785,42 @@ mod tests {
             .collect();
         assert!(enriched.contains(&x), "keeps the direct hit");
         assert!(enriched.contains(&w), "adds the graph-connected memory");
+    }
+
+    #[test]
+    fn recall_map_shows_triples_with_ids_and_get_cell_fetches_text_erasure_honest() {
+        let mut vault = memory_vault();
+        let kek = test_kek();
+        let now = 1_000;
+        let text = "Apollo is our secret flagship, launching on March 14";
+        let cell = vault.remember(&kek, text).unwrap();
+        vault
+            .add_triples(&cell, &[Triple::new("Apollo", "launches_on", "March 14")], now)
+            .unwrap();
+
+        // The map shows STRUCTURE (triples + the backing id), not the full memory prose.
+        let map = vault.recall_map(&kek, text, 5).unwrap();
+        let id_hex = hex::encode(cell.as_bytes());
+        assert!(map.contains("launches_on"), "map shows the relation: {map}");
+        assert!(map.contains(&id_hex), "map tags the edge with its cell id");
+        assert!(
+            !map.contains("secret flagship"),
+            "map must NOT carry the full memory text"
+        );
+
+        // Fetch the full text by id, on demand.
+        assert_eq!(vault.get_cell(&kek, &cell).unwrap().as_deref(), Some(text));
+
+        // Erasure stays honest: forget → gone from the map AND get_cell returns None.
+        vault.forget(&cell).unwrap();
+        assert!(
+            vault.recall_map(&kek, text, 5).unwrap().is_empty(),
+            "forgotten cell → empty map"
+        );
+        assert!(
+            vault.get_cell(&kek, &cell).unwrap().is_none(),
+            "forgotten cell → no text"
+        );
     }
 
     #[test]
