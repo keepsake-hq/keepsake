@@ -89,14 +89,14 @@ function cardHtml(mem, palette) {
   const icon = TRAVEL_RE.test(text) ? ICON_PLANE : ICON_NOTE;
   const src = sourceLabel(mem.source);
   return `
-    <div class="group bg-white border border-neutral-200/80 rounded-2xl px-4 py-3.5 flex items-start gap-3.5 hover:shadow-sm transition">
+    <div data-card="${mem.id}" data-text="${escapeHtml(title)}" class="group bg-white border border-neutral-200/80 rounded-2xl px-4 py-3.5 flex items-start gap-3.5 hover:shadow-sm transition">
       <span class="w-10 h-10 rounded-xl ${palette} flex items-center justify-center shrink-0">${icon}</span>
       <div class="min-w-0 flex-1">
         <div class="flex items-start justify-between gap-3">
           <div class="font-medium text-neutral-900 text-[15px] truncate">${escapeHtml(title)}</div>
           <div class="flex items-center gap-2 shrink-0">
             <span class="text-xs text-neutral-400 tabular-nums">${fmtTime(mem.created_at)}</span>
-            <button data-forget="${mem.id}" title="Forget" class="opacity-0 group-hover:opacity-100 text-neutral-300 hover:text-red-500 transition">${ICON_TRASH}</button>
+            <button data-forget="${mem.id}" aria-label="Remove this memory" class="shrink-0 inline-flex items-center justify-center w-11 h-11 -mr-1 rounded-xl text-neutral-500 hover:bg-red-50 hover:text-red-600 transition">${ICON_TRASH}</button>
           </div>
         </div>
         ${desc ? `<div class="text-sm text-neutral-500 mt-0.5 line-clamp-2">${escapeHtml(desc)}</div>` : ""}
@@ -223,13 +223,98 @@ async function doRemember() {
   } catch (_) {}
 }
 
-async function doForget(id) {
-  if (DEMO) return;
-  try {
-    await invoke("forget", { id });
-    await refresh();
-    if ($("#search-input").value.trim()) doSearch();
-  } catch (_) {}
+// ---------- safe delete: confirm, then an 8-second "undo" window before the memory is erased ----------
+const FORGET_DELAY_MS = 8000;
+const pendingForgets = new Map(); // id -> setTimeout handle
+
+function cardText(id) {
+  const el = document.querySelector(`[data-card="${id}"]`);
+  return (el && el.getAttribute("data-text")) || "this memory";
+}
+
+// Entry point from a card's remove button. Asks first — nothing is erased on this click.
+function doForget(id) {
+  const text = cardText(id);
+  const overlay = document.createElement("div");
+  overlay.className =
+    "fixed inset-0 z-50 flex items-center justify-center p-6 bg-neutral-900/40";
+  overlay.innerHTML = `
+    <div class="w-full max-w-md rounded-2xl bg-white shadow-2xl p-6">
+      <h2 class="text-2xl font-bold text-neutral-900">Remove this memory?</h2>
+      <div class="mt-4 rounded-xl bg-neutral-50 border border-neutral-200 px-4 py-3 text-lg text-neutral-700">${escapeHtml(text)}</div>
+      <p class="mt-4 text-lg text-neutral-600">You'll have a few seconds to undo this.</p>
+      <div class="mt-6 flex gap-3">
+        <button data-keep class="flex-1 min-h-[52px] rounded-xl border-2 border-neutral-300 px-4 py-3 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">Keep it</button>
+        <button data-remove class="flex-1 min-h-[52px] rounded-xl bg-red-600 px-4 py-3 text-lg font-semibold text-white hover:bg-red-700 transition">Remove</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) close();
+  });
+  overlay.querySelector("[data-keep]").addEventListener("click", close);
+  overlay.querySelector("[data-remove]").addEventListener("click", () => {
+    close();
+    beginForget(id, text);
+  });
+}
+
+// Hide the card now; erase only after the undo window elapses.
+function beginForget(id, text) {
+  document
+    .querySelectorAll(`[data-card="${id}"]`)
+    .forEach((el) => (el.style.display = "none"));
+  showUndoToast(id, text);
+  const handle = setTimeout(async () => {
+    pendingForgets.delete(id);
+    dismissToast();
+    if (!DEMO && invoke) {
+      try {
+        await invoke("forget", { id });
+        await refresh();
+      } catch (_) {}
+      if ($("#search-input") && $("#search-input").value.trim()) doSearch();
+    }
+  }, FORGET_DELAY_MS);
+  pendingForgets.set(id, handle);
+}
+
+function undoForget(id) {
+  const handle = pendingForgets.get(id);
+  if (handle === undefined) return;
+  clearTimeout(handle);
+  pendingForgets.delete(id);
+  document
+    .querySelectorAll(`[data-card="${id}"]`)
+    .forEach((el) => (el.style.display = ""));
+  dismissToast();
+}
+
+function dismissToast() {
+  const t = document.getElementById("undo-toast");
+  if (t) t.remove();
+}
+
+function showUndoToast(id, text) {
+  dismissToast();
+  const short = text.length > 38 ? text.slice(0, 36) + "…" : text;
+  const toast = document.createElement("div");
+  toast.id = "undo-toast";
+  toast.className =
+    "fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-[min(92vw,30rem)] rounded-2xl bg-neutral-900 text-white shadow-2xl overflow-hidden";
+  toast.innerHTML = `
+    <div class="flex items-center gap-4 px-5 py-4">
+      <span class="flex-1 text-lg">Removed "<span class="font-semibold">${escapeHtml(short)}</span>"</span>
+      <button data-undo class="shrink-0 min-h-[44px] rounded-xl bg-white/15 hover:bg-white/25 px-4 py-2 text-lg font-semibold transition">Undo</button>
+    </div>
+    <div data-bar class="h-1.5 bg-brand-500" style="width:100%;transition:width ${FORGET_DELAY_MS}ms linear"></div>`;
+  document.body.appendChild(toast);
+  toast.querySelector("[data-undo]").addEventListener("click", () => undoForget(id));
+  requestAnimationFrame(() => {
+    const bar = toast.querySelector("[data-bar]");
+    if (bar) bar.style.width = "0%";
+  });
 }
 
 async function doSearch() {

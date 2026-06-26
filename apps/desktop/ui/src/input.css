@@ -47,6 +47,12 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
+/* Visible keyboard focus everywhere — an accessibility floor for the whole app. */
+:focus-visible {
+  outline: 3px solid var(--color-brand-600);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
 ::selection {
   background: color-mix(in srgb, var(--color-brand-500) 22%, transparent);
 }

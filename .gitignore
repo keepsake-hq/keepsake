@@ -17,3 +17,6 @@ Cargo.lock.bak
 # Signing keys — NEVER commit. The updater private key lives outside the repo (~/.keepsake/).
 *.key
 *.key.pub
+
+# local dev / preview config (contains absolute machine paths)
+.claude/
