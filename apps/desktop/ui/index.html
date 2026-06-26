@@ -96,10 +96,10 @@
               <div class="text-lg font-semibold text-neutral-900">I have Keepsake on another device</div>
               <p class="mt-1 text-base text-neutral-600">If your phone or other computer still opens, you can read your 24 words there — under Settings — and type them here.</p>
             </div>
-            <div class="rounded-2xl border-2 border-neutral-200 bg-white p-5">
+            <button id="recovery-use-link" class="block w-full text-left rounded-2xl border-2 border-neutral-200 bg-white p-5 hover:border-neutral-300 hover:bg-neutral-50 transition">
               <div class="text-lg font-semibold text-neutral-900">I gave backup copies to people I trust</div>
-              <p class="mt-1 text-base text-neutral-600">Ask them for the copies you gave them. Putting those back together here is coming in the next update.</p>
-            </div>
+              <p class="mt-1 text-base text-neutral-600">Ask two of them for the piece you gave them, and put your memories back together here.</p>
+            </button>
             <button id="startfresh-link" class="block w-full text-left rounded-2xl border-2 border-neutral-200 bg-white p-5 hover:border-neutral-300 hover:bg-neutral-50 transition">
               <div class="text-lg font-semibold text-neutral-900">I don't have any of these</div>
               <p class="mt-1 text-base text-neutral-600">Start fresh with a new, empty Keepsake. Your old memories stay locked away — only your 24 words can ever open them.</p>
@@ -298,6 +298,14 @@
                 <div id="reveal-seed-grid" class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2"></div>
                 <button id="reveal-seed-hide" class="mt-3 min-h-[44px] text-base font-medium text-neutral-600 hover:text-neutral-900 underline underline-offset-2">Hide</button>
               </div>
+            </div>
+
+            <!-- Your safety net (social recovery) -->
+            <div class="bg-white border-2 border-neutral-200 rounded-2xl p-5">
+              <h2 class="text-lg font-semibold text-neutral-900">Your safety net</h2>
+              <p class="mt-1 text-base text-neutral-600">Give a sealed piece of your key to 2–3 people you trust. If you ever lose your words, any two of them together can bring your memories back. None of them can ever read your memories.</p>
+              <p id="safetynet-status" class="mt-2 text-base font-medium text-amber-700">Not set up yet.</p>
+              <button id="safetynet-setup" class="mt-3 min-h-[48px] inline-flex items-center rounded-xl border-2 border-neutral-300 px-5 text-base font-semibold text-neutral-800 hover:bg-neutral-50 transition">Set up trusted people</button>
             </div>
 
             <!-- Your other devices (sync) -->

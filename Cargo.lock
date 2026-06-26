@@ -1925,6 +1925,7 @@ dependencies = [
 name = "keepsake-desktop-core"
 version = "0.0.0"
 dependencies = [
+ "bip39",
  "hex",
  "keepsake-core",
  "keepsake-crypto",

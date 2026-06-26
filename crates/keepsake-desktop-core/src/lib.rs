@@ -65,6 +65,7 @@ pub fn archive_vault_files(dir: &std::path::Path, ts: i64) -> std::io::Result<Ve
         ("vault.db-wal", format!("vault-old-{ts}.db-wal")),
         ("vault.db-shm", format!("vault-old-{ts}.db-shm")),
         ("sync.json", format!("sync-old-{ts}.json")),
+        ("recovery.json", format!("recovery-old-{ts}.json")),
     ];
     let mut moved = Vec::new();
     for (from, to) in moves {
@@ -75,6 +76,69 @@ pub fn archive_vault_files(dir: &std::path::Path, ts: i64) -> std::io::Result<Ve
         }
     }
     Ok(moved)
+}
+
+/// Split the 24 words into `shares` secret pieces, any `threshold` of which bring the words back —
+/// the engine of social recovery ("give a piece to people you trust"). Each piece is a short
+/// `index-hex` string to save/print and hand to one trusted person. A single piece reveals nothing.
+pub fn recovery_split(mnemonic: &str, threshold: u8, shares: u8) -> Result<Vec<String>, String> {
+    let entropy = bip39::Mnemonic::parse(mnemonic.trim())
+        .map_err(|_| "not a valid set of 24 words".to_string())?
+        .to_entropy();
+    Ok(keepsake_crypto::recovery::split(&entropy, threshold, shares)
+        .into_iter()
+        .map(|p| format!("{}-{}", p.index, hex::encode(&p.bytes)))
+        .collect())
+}
+
+/// Rebuild the 24 words from collected pieces (each `index-hex`). Returns the mnemonic to unlock
+/// with. Needs at least two pieces from two different people; mismatched pieces are rejected kindly.
+pub fn recovery_combine(shares: &[String]) -> Result<String, String> {
+    let parts: Vec<keepsake_crypto::recovery::Share> = shares
+        .iter()
+        .filter_map(|s| {
+            let (idx, hx) = s.trim().split_once('-')?;
+            Some(keepsake_crypto::recovery::Share {
+                index: idx.trim().parse().ok()?,
+                bytes: hex::decode(hx.trim()).ok()?,
+            })
+        })
+        .collect();
+    if parts.len() < 2 {
+        return Err("please add at least two pieces, from two different people".to_string());
+    }
+    let entropy = keepsake_crypto::recovery::combine(&parts).ok_or_else(|| {
+        "these pieces don't fit together — check they're from two different people".to_string()
+    })?;
+    Ok(bip39::Mnemonic::from_entropy(&entropy)
+        .map_err(|_| "could not rebuild your words from these pieces".to_string())?
+        .to_string())
+}
+
+/// A local, non-secret record of a social-recovery setup: how many pieces bring the words back, and
+/// friendly names of who holds one (so the app can remind the user whom to ask). The pieces
+/// themselves are never stored — only the names. Lives next to the vault, never synced.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct RecoveryMeta {
+    pub threshold: u8,
+    pub names: Vec<String>,
+}
+
+impl RecoveryMeta {
+    pub fn load(path: &std::path::Path) -> Option<RecoveryMeta> {
+        std::fs::read(path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+    }
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -305,5 +369,21 @@ mod tests {
         // The absent sidecar was simply skipped, not invented.
         assert!(!p.join("vault-old-1234.db-shm").exists());
         assert_eq!(moved.len(), 3);
+    }
+
+    #[test]
+    fn recovery_split_then_any_two_pieces_rebuild_the_words() {
+        let shares = super::recovery_split(TEST_MNEMONIC, 2, 3).unwrap();
+        assert_eq!(shares.len(), 3, "three pieces for three trusted people");
+        // Any two of the three reconstruct the original 24 words.
+        for (a, b) in [(0, 1), (0, 2), (1, 2)] {
+            let back =
+                super::recovery_combine(&[shares[a].clone(), shares[b].clone()]).unwrap();
+            assert_eq!(back, TEST_MNEMONIC, "pieces {a}+{b} bring the words back");
+        }
+        // A single piece reveals nothing and is refused.
+        assert!(super::recovery_combine(&[shares[0].clone()]).is_err());
+        // Garbage pieces are rejected kindly, not with a panic.
+        assert!(super::recovery_combine(&["nonsense".into(), "1-zz".into()]).is_err());
     }
 }

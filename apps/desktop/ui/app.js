@@ -565,6 +565,7 @@ function enterShell() {
   navTo("start");
   refresh();
   loadSyncConfig();
+  loadRecoveryStatus();
 }
 
 // ---------- sync server setting ----------
@@ -766,6 +767,169 @@ on("#seed-copy", "click", async () => {
   } catch (_) {}
 });
 on("#seed-print", "click", () => window.print());
+
+// ---------- social recovery: give sealed pieces to people you trust ----------
+function modalShell(innerHtml) {
+  const o = document.createElement("div");
+  o.className =
+    "fixed inset-0 z-50 flex items-center justify-center p-6 bg-neutral-900/40 overflow-y-auto";
+  o.innerHTML = `<div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl p-6 my-8">${innerHtml}</div>`;
+  document.body.appendChild(o);
+  return o;
+}
+
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+async function loadRecoveryStatus() {
+  const el = $("#safetynet-status");
+  if (!el) return;
+  let meta = null;
+  if (!DEMO && invoke) {
+    try {
+      meta = await invoke("get_recovery_meta");
+    } catch (_) {}
+  }
+  if (meta && meta.names && meta.names.length) {
+    el.textContent = "On — pieces are with: " + meta.names.join(", ");
+    el.className = "mt-2 text-base font-medium text-brand-700";
+  } else {
+    el.textContent = "Not set up yet.";
+    el.className = "mt-2 text-base font-medium text-amber-700";
+  }
+}
+
+function openRecoverySetup() {
+  const o = modalShell(`
+    <h2 class="text-2xl font-bold text-neutral-900">Set up your safety net</h2>
+    <p class="mt-2 text-lg text-neutral-600">We'll make 3 secret pieces. Give one to each of 3 people you trust. Any two of them together can bring your memories back — one alone can't read anything.</p>
+    <div class="mt-5 space-y-3">
+      ${[1, 2, 3].map((i) => `<input class="rec-name w-full min-h-[52px] rounded-xl border-2 border-neutral-200 px-4 text-lg" placeholder="Person ${i} — e.g. My daughter Anna">`).join("")}
+    </div>
+    <div class="mt-6 flex gap-3">
+      <button data-cancel class="flex-1 min-h-[52px] rounded-xl border-2 border-neutral-300 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">Cancel</button>
+      <button data-next class="flex-1 min-h-[52px] rounded-xl bg-brand-700 text-white text-lg font-semibold hover:bg-brand-800 transition">Create the pieces</button>
+    </div>`);
+  o.querySelector("[data-cancel]").addEventListener("click", () => o.remove());
+  o.querySelector("[data-next]").addEventListener("click", async () => {
+    const names = [...o.querySelectorAll(".rec-name")]
+      .map((i) => i.value.trim())
+      .filter(Boolean);
+    if (names.length < 2) return;
+    let pieces = [];
+    if (DEMO || !invoke) {
+      pieces = names.map((_, i) => `${i + 1}-demopiece${i}`);
+    } else {
+      try {
+        pieces = await invoke("recovery_split", { threshold: 2, shares: names.length });
+      } catch (_) {
+        return;
+      }
+    }
+    o.remove();
+    showRecoveryPieces(names, pieces);
+  });
+}
+
+function showRecoveryPieces(names, pieces) {
+  const o = modalShell(`
+    <h2 class="text-2xl font-bold text-neutral-900">Give each person their piece</h2>
+    <p class="mt-2 text-lg text-neutral-600">Save each piece and give it to that person. Don't keep them together with your 24 words.</p>
+    <div class="mt-5 space-y-3">
+      ${names
+        .map(
+          (n, i) => `
+        <div class="rounded-xl border-2 border-neutral-200 p-4">
+          <div class="text-lg font-semibold text-neutral-900">${escapeHtml(n)}</div>
+          <div class="mt-2 flex gap-2">
+            <button class="rec-save min-h-[44px] rounded-lg border-2 border-neutral-300 px-4 text-base font-semibold hover:bg-neutral-50 transition" data-i="${i}">Save this piece</button>
+            <button class="rec-copy min-h-[44px] rounded-lg border-2 border-neutral-300 px-4 text-base font-semibold hover:bg-neutral-50 transition" data-i="${i}">Copy</button>
+          </div>
+        </div>`,
+        )
+        .join("")}
+    </div>
+    <button data-done class="mt-6 w-full min-h-[52px] rounded-xl bg-brand-700 text-white text-lg font-semibold hover:bg-brand-800 transition">Done — my safety net is on</button>`);
+  o.querySelectorAll(".rec-save").forEach((b) =>
+    b.addEventListener("click", () => {
+      const i = +b.dataset.i;
+      const body = `Keepsake recovery piece for ${names[i]}\n\nKeep this safe and private. If they ever lose their 24 words, they will ask you and one other person for your pieces to bring their memories back. This piece alone reveals nothing.\n\nYour piece:\n${pieces[i]}\n`;
+      downloadText(`keepsake-piece-${names[i].replace(/\s+/g, "-")}.txt`, body);
+    }),
+  );
+  o.querySelectorAll(".rec-copy").forEach((b) =>
+    b.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(pieces[+b.dataset.i]);
+        b.textContent = "Copied ✓";
+        setTimeout(() => (b.textContent = "Copy"), 1500);
+      } catch (_) {}
+    }),
+  );
+  o.querySelector("[data-done]").addEventListener("click", async () => {
+    if (!DEMO && invoke) {
+      try {
+        await invoke("save_recovery_meta", { threshold: 2, names });
+      } catch (_) {}
+    }
+    o.remove();
+    loadRecoveryStatus();
+  });
+}
+
+// Use: rebuild the words from collected pieces (reached from the lost-access triage).
+function openRecoveryUse() {
+  const o = modalShell(`
+    <h2 class="text-2xl font-bold text-neutral-900">Get back in with your trusted people</h2>
+    <p class="mt-2 text-lg text-neutral-600">Ask two of the people you trust for the piece you gave them, and paste both here.</p>
+    <div class="mt-5 space-y-3">
+      <textarea class="rec-piece w-full rounded-xl border-2 border-neutral-200 px-4 py-3 text-base" rows="2" placeholder="Paste the first piece here"></textarea>
+      <textarea class="rec-piece w-full rounded-xl border-2 border-neutral-200 px-4 py-3 text-base" rows="2" placeholder="Paste the second piece here"></textarea>
+    </div>
+    <p data-msg class="mt-3 text-base text-red-700 hidden"></p>
+    <div class="mt-6 flex gap-3">
+      <button data-cancel class="flex-1 min-h-[52px] rounded-xl border-2 border-neutral-300 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">Back</button>
+      <button data-go class="flex-1 min-h-[52px] rounded-xl bg-brand-700 text-white text-lg font-semibold hover:bg-brand-800 transition">Bring my memories back</button>
+    </div>`);
+  o.querySelector("[data-cancel]").addEventListener("click", () => o.remove());
+  o.querySelector("[data-go]").addEventListener("click", async () => {
+    const pieces = [...o.querySelectorAll(".rec-piece")]
+      .map((t) => t.value.trim())
+      .filter(Boolean);
+    const msg = o.querySelector("[data-msg]");
+    if (pieces.length < 2) {
+      msg.textContent = "Please paste two pieces, from two different people.";
+      msg.classList.remove("hidden");
+      return;
+    }
+    if (DEMO || !invoke) {
+      o.remove();
+      enterShell();
+      return;
+    }
+    let mnemonic;
+    try {
+      mnemonic = await invoke("recovery_combine", { shares: pieces });
+    } catch (e) {
+      msg.textContent = String(e).replace(/^Error:\s*/, "");
+      msg.classList.remove("hidden");
+      return;
+    }
+    o.remove();
+    try {
+      await runUnlock(mnemonic);
+    } catch (_) {}
+  });
+}
+
+on("#safetynet-setup", "click", openRecoverySetup);
+on("#recovery-use-link", "click", openRecoveryUse);
 
 // "Start fresh" needs a deliberate press-and-hold — easy for a senior, hard to trigger by accident.
 (function wireResetHold() {

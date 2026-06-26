@@ -70,6 +70,11 @@ fn sync_config_path() -> std::path::PathBuf {
     keepsake_dir().join("sync.json")
 }
 
+/// Where the (non-secret) social-recovery record lives: who holds a piece + the threshold.
+fn recovery_meta_path() -> std::path::PathBuf {
+    keepsake_dir().join("recovery.json")
+}
+
 /// How often the background task reconciles the vault with the relay.
 const SYNC_PERIOD: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -289,6 +294,37 @@ fn reveal_seed(state: State<AppState>) -> Result<String, String> {
     Ok(session.mnemonic.clone())
 }
 
+/// Social recovery — split the 24 words into pieces for trusted people. Needs the vault unlocked.
+#[tauri::command]
+fn recovery_split(
+    state: State<AppState>,
+    threshold: u8,
+    shares: u8,
+) -> Result<Vec<String>, String> {
+    let guard = state.0.lock().unwrap();
+    let session = guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
+    keepsake_desktop_core::recovery_split(&session.mnemonic, threshold, shares)
+}
+
+/// Rebuild the 24 words from collected pieces (runs on the locked unlock screen). Returns the words.
+#[tauri::command]
+fn recovery_combine(shares: Vec<String>) -> Result<String, String> {
+    keepsake_desktop_core::recovery_combine(&shares)
+}
+
+/// Remember locally (non-secret) who holds a recovery piece, so the app can remind the user.
+#[tauri::command]
+fn save_recovery_meta(threshold: u8, names: Vec<String>) -> Result<(), String> {
+    keepsake_desktop_core::RecoveryMeta { threshold, names }
+        .save(&recovery_meta_path())
+        .map_err(|e| format!("could not save your safety net: {e}"))
+}
+
+#[tauri::command]
+fn get_recovery_meta() -> Option<keepsake_desktop_core::RecoveryMeta> {
+    keepsake_desktop_core::RecoveryMeta::load(&recovery_meta_path())
+}
+
 #[tauri::command]
 fn get_sync_config() -> keepsake_desktop_core::SyncConfig {
     keepsake_desktop_core::SyncConfig::load(&sync_config_path())
@@ -439,7 +475,11 @@ pub fn run() {
             get_sync_config,
             set_sync_config,
             reset_vault,
-            reveal_seed
+            reveal_seed,
+            recovery_split,
+            recovery_combine,
+            save_recovery_meta,
+            get_recovery_meta
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
