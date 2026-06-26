@@ -275,6 +275,21 @@
               <p class="mt-3 flex items-start gap-2 text-base font-medium text-brand-800"><span class="mt-2 w-2.5 h-2.5 rounded-full bg-brand-500 shrink-0"></span> <span>Private — only you can read these. They're locked so no one else can, not even us.</span></p>
             </div>
 
+            <!-- Your 24 words (reveal, like a wallet) -->
+            <div class="bg-white border-2 border-neutral-200 rounded-2xl p-5">
+              <h2 class="text-lg font-semibold text-neutral-900">Your 24 words</h2>
+              <p class="mt-1 text-base text-neutral-600">These open your memories. Keep them private — and write them on paper if you haven't yet.</p>
+              <button id="reveal-seed-btn" class="mt-3 min-h-[48px] inline-flex items-center gap-2 rounded-xl border-2 border-neutral-300 px-5 text-base font-semibold text-neutral-800 hover:bg-neutral-50 transition">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                Show my 24 words
+              </button>
+              <div id="reveal-seed-area" class="hidden mt-3">
+                <p class="text-base font-medium text-amber-700">⚠ Make sure no one is looking over your shoulder.</p>
+                <div id="reveal-seed-grid" class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2"></div>
+                <button id="reveal-seed-hide" class="mt-3 min-h-[44px] text-base font-medium text-neutral-600 hover:text-neutral-900 underline underline-offset-2">Hide</button>
+              </div>
+            </div>
+
             <!-- Your other devices (sync) -->
             <div class="bg-white border-2 border-neutral-200 rounded-2xl p-5 space-y-3">
               <div>

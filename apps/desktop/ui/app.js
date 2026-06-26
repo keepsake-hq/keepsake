@@ -662,6 +662,43 @@ $$(".search-chip").forEach((b) =>
 // "Start over" is also reachable from Settings (locks + shows the gated reset screen).
 on("#settings-startover", "click", () => show("reset"));
 
+// Show my 24 words again — gated by a "no one is looking" step, like a hardware wallet.
+const DEMO_SEED =
+  "apple river cloud stone meadow lamp window quiet garden silver paper ocean bridge candle forest gentle sunrise pocket mirror violet harbor cotton ladder compass";
+on("#reveal-seed-btn", "click", async () => {
+  let phrase = "";
+  if (DEMO || !invoke) {
+    phrase = DEMO_SEED;
+  } else {
+    try {
+      phrase = await invoke("reveal_seed");
+    } catch (_) {
+      return;
+    }
+  }
+  const grid = $("#reveal-seed-grid");
+  if (grid)
+    grid.innerHTML = phrase
+      .split(/\s+/)
+      .map(
+        (w, i) =>
+          `<div class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2"><span class="w-5 text-right text-sm tabular-nums text-neutral-400">${i + 1}</span><span class="text-base font-medium text-neutral-800">${escapeHtml(w)}</span></div>`,
+      )
+      .join("");
+  const area = $("#reveal-seed-area");
+  if (area) area.classList.remove("hidden");
+  const btn = $("#reveal-seed-btn");
+  if (btn) btn.classList.add("hidden");
+});
+on("#reveal-seed-hide", "click", () => {
+  const grid = $("#reveal-seed-grid");
+  if (grid) grid.innerHTML = "";
+  const area = $("#reveal-seed-area");
+  if (area) area.classList.add("hidden");
+  const btn = $("#reveal-seed-btn");
+  if (btn) btn.classList.remove("hidden");
+});
+
 // "Start fresh" needs a deliberate press-and-hold — easy for a senior, hard to trigger by accident.
 (function wireResetHold() {
   const btn = $("#reset-hold");

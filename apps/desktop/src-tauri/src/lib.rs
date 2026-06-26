@@ -40,6 +40,9 @@ struct Session {
     daemon: tauri::async_runtime::JoinHandle<()>,
     sync_ctx: SyncCtx,
     sync: Option<tauri::async_runtime::JoinHandle<()>>,
+    /// The 24 words, held while unlocked so Settings can show them again (like a hardware wallet's
+    /// "reveal recovery phrase"). Dropped on lock — never written to disk.
+    mnemonic: String,
 }
 
 /// Session state: `None` while locked, `Some` once a seed has been entered.
@@ -249,6 +252,7 @@ fn unlock(
         daemon,
         sync_ctx,
         sync,
+        mnemonic: mnemonic.trim().to_string(),
     });
     Ok(status)
 }
@@ -274,6 +278,15 @@ fn reset_vault(state: State<AppState>) -> Result<(), String> {
     keepsake_desktop_core::archive_vault_files(&keepsake_dir(), now_unix())
         .map(|_| ())
         .map_err(|e| format!("could not set your old memories aside: {e}"))
+}
+
+/// Return the 24 words so Settings can show them again (gated in the UI by a "make sure no one is
+/// looking" step). Works only while unlocked; the words live in the session, never on disk.
+#[tauri::command]
+fn reveal_seed(state: State<AppState>) -> Result<String, String> {
+    let guard = state.0.lock().unwrap();
+    let session = guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
+    Ok(session.mnemonic.clone())
 }
 
 #[tauri::command]
@@ -425,7 +438,8 @@ pub fn run() {
             install_update,
             get_sync_config,
             set_sync_config,
-            reset_vault
+            reset_vault,
+            reveal_seed
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
