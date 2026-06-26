@@ -204,7 +204,6 @@ async function refresh() {
     const st = await invoke("status");
     SETTINGS_COUNT = st.memories;
     $("#set-count").textContent = String(st.memories);
-    $("#set-profile").textContent = st.profile;
   } catch (_) {}
   try {
     renderTimeline(await invoke("recent", { limit: 6 }));
@@ -322,16 +321,37 @@ function showUndoToast(id, text) {
   });
 }
 
+function renderHit(h) {
+  const palette = TILES[hashIndex(h.id, TILES.length)];
+  const icon = TRAVEL_RE.test(h.text) ? ICON_PLANE : ICON_NOTE;
+  const oneLine = h.text.replace(/\s*\n\s*/g, " — ");
+  return `
+    <li class="bg-white border border-neutral-200/80 rounded-2xl px-5 py-4 flex items-center gap-4 hover:shadow-sm transition">
+      <span class="w-12 h-12 rounded-xl ${palette} flex items-center justify-center shrink-0">${icon}</span>
+      <div class="min-w-0 flex-1">
+        <div class="text-lg font-semibold text-neutral-900 truncate">${escapeHtml(oneLine)}</div>
+        <div class="mt-1.5 flex items-center gap-2">
+          <span class="inline-flex items-center gap-1.5 rounded-md bg-brand-50 px-2 py-0.5 text-sm font-medium text-brand-800">${ICON_LOCK_S} Only on your device</span>
+          ${sourceLabel(h.source) ? `<span class="text-sm text-neutral-500">· ${escapeHtml(sourceLabel(h.source))}</span>` : ""}
+        </div>
+      </div>
+      <svg class="w-5 h-5 text-neutral-300 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+    </li>`;
+}
+
 async function doSearch() {
   const q = $("#search-input").value.trim();
   $("#search-clear").classList.toggle("hidden", !q);
+  const examples = $("#search-examples");
+  const empty = $("#search-empty");
+  const results = $("#search-results");
   if (!q) {
-    $("#search-results").innerHTML = "";
-    $("#search-hint").classList.remove("hidden");
-    $("#search-empty").classList.add("hidden");
+    results.innerHTML = "";
+    if (examples) examples.classList.remove("hidden");
+    if (empty) empty.classList.add("hidden");
     return;
   }
-  $("#search-hint").classList.add("hidden");
+  if (examples) examples.classList.add("hidden");
   let hits = [];
   if (DEMO) {
     hits = DEMO_MEMORIES.filter((m) =>
@@ -344,26 +364,44 @@ async function doSearch() {
       hits = [];
     }
   }
-  $("#search-empty").classList.toggle("hidden", hits.length > 0);
-  $("#search-results").innerHTML = hits
-    .map((h) => {
-      const palette = TILES[hashIndex(h.id, TILES.length)];
-      const icon = TRAVEL_RE.test(h.text) ? ICON_PLANE : ICON_NOTE;
-      const oneLine = h.text.replace(/\s*\n\s*/g, " — ");
-      return `
-      <li class="bg-white border border-neutral-200/80 rounded-2xl px-5 py-4 flex items-center gap-4 hover:shadow-sm transition">
-        <span class="w-12 h-12 rounded-xl ${palette} flex items-center justify-center shrink-0">${icon}</span>
-        <div class="min-w-0 flex-1">
-          <div class="text-[15px] font-semibold text-neutral-900 truncate">${escapeHtml(oneLine)}</div>
-          <div class="mt-1.5 flex items-center gap-2">
-            <span class="inline-flex items-center gap-1.5 rounded-md bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">${ICON_LOCK_S} Found locally via Nomic</span>
-            ${sourceLabel(h.source) ? `<span class="text-xs text-neutral-400">· ${escapeHtml(sourceLabel(h.source))}</span>` : ""}
-          </div>
-        </div>
-        <svg class="w-5 h-5 text-neutral-300 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-      </li>`;
-    })
-    .join("");
+  if (hits.length) {
+    if (empty) empty.classList.add("hidden");
+    results.innerHTML = hits.map(renderHit).join("");
+  } else {
+    results.innerHTML = "";
+    await showNoResult(q);
+  }
+}
+
+// A no-result that never dead-ends: explain kindly, offer to save it, and show recent memories.
+async function showNoResult(q) {
+  const empty = $("#search-empty");
+  if (!empty) return;
+  let recent = [];
+  if (DEMO) recent = DEMO_MEMORIES.slice(0, 3);
+  else {
+    try {
+      recent = await invoke("recent", { limit: 3 });
+    } catch (_) {}
+  }
+  empty.classList.remove("hidden");
+  empty.innerHTML = `
+    <div class="text-center py-8">
+      <p class="text-xl font-semibold text-neutral-800">I couldn't find anything for that.</p>
+      <p class="mt-2 text-lg text-neutral-600">Try simpler words — like just a name or a place.</p>
+      <button id="save-as-memory" class="mt-5 inline-flex min-h-[48px] items-center rounded-xl bg-brand-700 px-5 text-lg font-semibold text-white hover:bg-brand-800 transition">Save “${escapeHtml(q)}” as a new memory</button>
+    </div>
+    ${recent.length ? `<div class="mt-2"><p class="text-base font-semibold text-neutral-700 mb-3">Your most recent memories:</p><ul class="space-y-3">${recent.map(renderHit).join("")}</ul></div>` : ""}`;
+  const save = $("#save-as-memory");
+  if (save)
+    save.addEventListener("click", () => {
+      navTo("start");
+      const i = $("#remember-input");
+      if (i) {
+        i.value = q;
+        i.focus();
+      }
+    });
 }
 
 // ---------- onboarding / unlock ----------
@@ -612,6 +650,17 @@ $$(".example-chip").forEach((b) =>
     i.focus();
   }),
 );
+// Search example chips: tap to run the question.
+$$(".search-chip").forEach((b) =>
+  b.addEventListener("click", () => {
+    const i = $("#search-input");
+    if (!i) return;
+    i.value = b.dataset.q || b.textContent.trim();
+    doSearch();
+  }),
+);
+// "Start over" is also reachable from Settings (locks + shows the gated reset screen).
+on("#settings-startover", "click", () => show("reset"));
 
 // "Start fresh" needs a deliberate press-and-hold — easy for a senior, hard to trigger by accident.
 (function wireResetHold() {
