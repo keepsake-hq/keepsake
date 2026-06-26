@@ -145,8 +145,11 @@ function niceModel(m) {
 
 function renderTimeline(memories) {
   const el = $("#timeline");
-  $("#start-empty").classList.toggle("hidden", memories.length > 0);
-  $("#start-count").textContent = memories.length ? countLabel(SETTINGS_COUNT) : "";
+  const has = memories.length > 0;
+  $("#start-empty").classList.toggle("hidden", has);
+  const rh = $("#recent-header");
+  if (rh) rh.classList.toggle("hidden", !has);
+  $("#start-count").textContent = has ? countLabel(SETTINGS_COUNT) : "";
   const groups = [];
   for (const m of memories) {
     const label = dateLabel(m.created_at);
@@ -484,13 +487,22 @@ function paintSyncOptions(mode) {
 
 function setSyncStatus(mode) {
   const el = $("#sync-status");
-  if (!el) return;
-  el.textContent =
-    mode === "hosted"
-      ? "On — syncing through the hosted blind relay (it sees only ciphertext)."
-      : mode === "own"
-        ? "On — syncing through your own relay."
-        : "Off — your memory stays only on this device.";
+  if (el) {
+    el.textContent =
+      mode === "hosted"
+        ? "On — your devices share the same notes, privately. The place in the middle can never read them."
+        : mode === "own"
+          ? "On — syncing through your own server."
+          : "Off — your notes stay only on this computer.";
+  }
+  // Keep the honest line on the Home screen in step with the real setting.
+  const home = $("#home-status-text");
+  if (home) {
+    home.textContent =
+      mode === "off"
+        ? "Saved only on this computer. Nothing is sent anywhere."
+        : "Saved on this computer and your other devices — privately.";
+  }
 }
 
 async function loadSyncConfig() {
@@ -590,6 +602,16 @@ on("#lostaccess-link", "click", () => show("lostaccess"));
 on("#lostaccess-back", "click", () => show("unlock"));
 on("#startfresh-link", "click", () => show("reset"));
 on("#reset-cancel", "click", () => show("unlock"));
+
+// Example chips on Home: tap to pre-fill the box (the user still presses Remember).
+$$(".example-chip").forEach((b) =>
+  b.addEventListener("click", () => {
+    const i = $("#remember-input");
+    if (!i) return;
+    i.value = b.dataset.fill || b.textContent.trim();
+    i.focus();
+  }),
+);
 
 // "Start fresh" needs a deliberate press-and-hold — easy for a senior, hard to trigger by accident.
 (function wireResetHold() {
