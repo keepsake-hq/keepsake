@@ -66,6 +66,7 @@ pub fn archive_vault_files(dir: &std::path::Path, ts: i64) -> std::io::Result<Ve
         ("vault.db-shm", format!("vault-old-{ts}.db-shm")),
         ("sync.json", format!("sync-old-{ts}.json")),
         ("recovery.json", format!("recovery-old-{ts}.json")),
+        ("backup.json", format!("backup-old-{ts}.json")),
     ];
     let mut moved = Vec::new();
     for (from, to) in moves {
@@ -113,6 +114,43 @@ pub fn recovery_combine(shares: &[String]) -> Result<String, String> {
     Ok(bip39::Mnemonic::from_entropy(&entropy)
         .map_err(|_| "could not rebuild your words from these pieces".to_string())?
         .to_string())
+}
+
+/// The unguessable, seed-derived id of this vault's backup slot on the relay. Same seed → same slot
+/// (so a restore on a new computer finds it); a one-way hash, so the relay learns nothing of the seed.
+pub fn backup_id(mnemonic: &str) -> Result<String, String> {
+    use sha2::Digest;
+    let roots = keepsake_crypto::RootKeys::from_mnemonic(mnemonic.trim(), "")
+        .map_err(|_| "not a valid set of 24 words".to_string())?;
+    let mut h = sha2::Sha256::new();
+    h.update(b"keepsake/v1/backup-id");
+    h.update(roots.capability_root());
+    Ok(hex::encode(&h.finalize()[..16]))
+}
+
+/// Local record of the "safe copy" (backup) state: whether it's on and when it last saved.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct BackupMeta {
+    pub on: bool,
+    pub last_saved: i64,
+}
+
+impl BackupMeta {
+    pub fn load(path: &std::path::Path) -> BackupMeta {
+        std::fs::read(path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?,
+        )
+    }
 }
 
 /// A local, non-secret record of a social-recovery setup: how many pieces bring the words back, and
@@ -385,5 +423,13 @@ mod tests {
         assert!(super::recovery_combine(&[shares[0].clone()]).is_err());
         // Garbage pieces are rejected kindly, not with a panic.
         assert!(super::recovery_combine(&["nonsense".into(), "1-zz".into()]).is_err());
+    }
+
+    #[test]
+    fn backup_id_is_stable_and_seed_bound() {
+        let a = super::backup_id(TEST_MNEMONIC).unwrap();
+        assert_eq!(a, super::backup_id(TEST_MNEMONIC).unwrap(), "same seed → same slot");
+        assert_eq!(a.len(), 32, "16 bytes as hex");
+        assert!(super::backup_id("not the words").is_err());
     }
 }

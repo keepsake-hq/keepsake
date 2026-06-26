@@ -43,6 +43,9 @@ struct Session {
     /// The 24 words, held while unlocked so Settings can show them again (like a hardware wallet's
     /// "reveal recovery phrase"). Dropped on lock — never written to disk.
     mnemonic: String,
+    /// The safe-copy (backup) password, held after the user turns backup on, so fresh copies +
+    /// restore don't re-ask. Dropped on lock — never written to disk.
+    backup_password: Option<String>,
 }
 
 /// Session state: `None` while locked, `Some` once a seed has been entered.
@@ -73,6 +76,141 @@ fn sync_config_path() -> std::path::PathBuf {
 /// Where the (non-secret) social-recovery record lives: who holds a piece + the threshold.
 fn recovery_meta_path() -> std::path::PathBuf {
     keepsake_dir().join("recovery.json")
+}
+
+/// Where the (non-secret) safe-copy state lives: on/off + when it last saved.
+fn backup_meta_path() -> std::path::PathBuf {
+    keepsake_dir().join("backup.json")
+}
+
+/// Friendly message for a relay/backup failure — never a raw error or HTTP code.
+fn backup_err(e: keepsake_relay::RelayError) -> String {
+    match e {
+        keepsake_relay::RelayError::Backup | keepsake_relay::RelayError::Status(401) => {
+            "that backup password didn't match".to_string()
+        }
+        _ => "couldn't reach the safe-copy server — check your internet and try again".to_string(),
+    }
+}
+
+/// Pull the passport bytes + backup id out of the unlocked session (briefly held lock).
+fn export_for_backup(state: &State<AppState>) -> Result<(Vec<u8>, String), String> {
+    let guard = state.0.lock().unwrap();
+    let session = guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
+    let passport = session
+        .vault
+        .lock()
+        .map_err(|_| "vault poisoned".to_string())?
+        .export_passport()
+        .map_err(|e| format!("{e:?}"))?;
+    let bytes = serde_json::to_vec(&passport).map_err(|e| e.to_string())?;
+    let id = keepsake_desktop_core::backup_id(&session.mnemonic)?;
+    Ok((bytes, id))
+}
+
+/// Register-if-needed + upload an encrypted blob of `bytes` under `id`, unlocked by `password`.
+async fn upload_backup(id: &str, password: &str, bytes: Vec<u8>) -> Result<(), String> {
+    let client = keepsake_relay::BackupRelayClient::new(keepsake_desktop_core::HOSTED_RELAY_URL);
+    let (session_key, export_key) = match client.login(id, password.as_bytes()).await {
+        Ok(v) => v,
+        Err(keepsake_relay::RelayError::Status(404)) => {
+            client.register(id, password.as_bytes()).await.map_err(backup_err)?;
+            client.login(id, password.as_bytes()).await.map_err(backup_err)?
+        }
+        Err(e) => return Err(backup_err(e)),
+    };
+    let blob = keepsake_backup::lock_blob(&export_key, &bytes)
+        .map_err(|_| "could not seal your safe copy".to_string())?;
+    client.upload(id, &session_key, blob).await.map_err(backup_err)
+}
+
+/// Turn on the safe copy with `password` and upload now. The password is held in the session so
+/// later copies + restore don't re-ask; it is never written to disk.
+#[tauri::command]
+async fn backup_enable(state: State<'_, AppState>, password: String) -> Result<(), String> {
+    let (bytes, id) = export_for_backup(&state)?;
+    upload_backup(&id, &password, bytes).await?;
+    {
+        let mut guard = state.0.lock().unwrap();
+        if let Some(session) = guard.as_mut() {
+            session.backup_password = Some(password);
+        }
+    }
+    keepsake_desktop_core::BackupMeta {
+        on: true,
+        last_saved: now_unix(),
+    }
+    .save(&backup_meta_path())
+    .map_err(|e| format!("{e}"))
+}
+
+/// Save a fresh safe copy using the password already held this session. No-op if off or no password
+/// is held yet (e.g. right after typing the 24 words). Called automatically after changes.
+#[tauri::command]
+async fn backup_now(state: State<'_, AppState>) -> Result<(), String> {
+    if !keepsake_desktop_core::BackupMeta::load(&backup_meta_path()).on {
+        return Ok(());
+    }
+    let (bytes, id, password) = {
+        let guard = state.0.lock().unwrap();
+        let session = guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
+        let Some(password) = session.backup_password.clone() else {
+            return Ok(());
+        };
+        let passport = session
+            .vault
+            .lock()
+            .map_err(|_| "vault poisoned".to_string())?
+            .export_passport()
+            .map_err(|e| format!("{e:?}"))?;
+        let bytes = serde_json::to_vec(&passport).map_err(|e| e.to_string())?;
+        let id = keepsake_desktop_core::backup_id(&session.mnemonic)?;
+        (bytes, id, password)
+    };
+    upload_backup(&id, &password, bytes).await?;
+    keepsake_desktop_core::BackupMeta {
+        on: true,
+        last_saved: now_unix(),
+    }
+    .save(&backup_meta_path())
+    .ok();
+    Ok(())
+}
+
+/// Bring memories back from the safe copy into the (unlocked) vault, using `password`.
+#[tauri::command]
+async fn backup_restore(state: State<'_, AppState>, password: String) -> Result<usize, String> {
+    let id = {
+        let guard = state.0.lock().unwrap();
+        let session = guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
+        keepsake_desktop_core::backup_id(&session.mnemonic)?
+    };
+    let client = keepsake_relay::BackupRelayClient::new(keepsake_desktop_core::HOSTED_RELAY_URL);
+    let (session_key, export_key) = client
+        .login(&id, password.as_bytes())
+        .await
+        .map_err(backup_err)?;
+    let blob = client
+        .download(&id, &session_key)
+        .await
+        .map_err(backup_err)?
+        .ok_or_else(|| "no safe copy was found for these 24 words".to_string())?;
+    let bytes = keepsake_backup::unlock_blob(&export_key, &blob)
+        .map_err(|_| "that backup password didn't match".to_string())?;
+    let passport: keepsake_store_sqlite::Passport =
+        serde_json::from_slice(&bytes).map_err(|_| "the safe copy was unreadable".to_string())?;
+    let guard = state.0.lock().unwrap();
+    let session = guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
+    let mut vault = session.vault.lock().map_err(|_| "vault poisoned".to_string())?;
+    vault
+        .import_passport(&session.kek, &passport)
+        .map_err(|e| format!("{e:?}"))
+}
+
+/// The safe-copy state (on/off + when it last saved) for Settings.
+#[tauri::command]
+fn backup_status() -> keepsake_desktop_core::BackupMeta {
+    keepsake_desktop_core::BackupMeta::load(&backup_meta_path())
 }
 
 /// How often the background task reconciles the vault with the relay.
@@ -258,6 +396,7 @@ fn unlock(
         sync_ctx,
         sync,
         mnemonic: mnemonic.trim().to_string(),
+        backup_password: None,
     });
     Ok(status)
 }
@@ -479,7 +618,11 @@ pub fn run() {
             recovery_split,
             recovery_combine,
             save_recovery_meta,
-            get_recovery_meta
+            get_recovery_meta,
+            backup_enable,
+            backup_now,
+            backup_restore,
+            backup_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

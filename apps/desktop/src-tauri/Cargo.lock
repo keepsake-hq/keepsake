@@ -2953,10 +2953,12 @@ name = "keepsake-desktop"
 version = "0.0.0"
 dependencies = [
  "hex",
+ "keepsake-backup",
  "keepsake-core",
  "keepsake-crypto",
  "keepsake-daemon",
  "keepsake-desktop-core",
+ "keepsake-relay",
  "keepsake-retrieval",
  "keepsake-store-sqlite",
  "keepsake-vault",
@@ -2982,6 +2984,7 @@ dependencies = [
  "keepsake-vault",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

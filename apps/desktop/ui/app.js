@@ -224,6 +224,7 @@ async function doRemember() {
     await invoke("remember", { text });
     input.value = "";
     await refresh();
+    autoBackup();
   } catch (_) {}
 }
 
@@ -277,6 +278,7 @@ function beginForget(id, text) {
       try {
         await invoke("forget", { id });
         await refresh();
+        autoBackup();
       } catch (_) {}
       if ($("#search-input") && $("#search-input").value.trim()) doSearch();
     }
@@ -566,6 +568,7 @@ function enterShell() {
   refresh();
   loadSyncConfig();
   loadRecoveryStatus();
+  loadBackupStatus();
 }
 
 // ---------- sync server setting ----------
@@ -930,6 +933,127 @@ function openRecoveryUse() {
 
 on("#safetynet-setup", "click", openRecoverySetup);
 on("#recovery-use-link", "click", openRecoveryUse);
+
+// ---------- a safe copy (encrypted backup) ----------
+function fmtDate(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  return (
+    d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) +
+    ", " +
+    d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+  );
+}
+
+async function loadBackupStatus() {
+  const status = $("#backup-status");
+  const toggle = $("#backup-toggle");
+  if (!status || !toggle) return;
+  let meta = { on: false, last_saved: 0 };
+  if (!DEMO && invoke) {
+    try {
+      meta = await invoke("backup_status");
+    } catch (_) {}
+  }
+  if (meta && meta.on) {
+    status.textContent = meta.last_saved
+      ? "On — last saved " + fmtDate(meta.last_saved)
+      : "On.";
+    status.className = "mt-2 text-base font-medium text-brand-700";
+    toggle.textContent = "Save a fresh copy now";
+  } else {
+    status.textContent = "Off.";
+    status.className = "mt-2 text-base font-medium text-amber-700";
+    toggle.textContent = "Keep a safe copy";
+  }
+}
+
+function backupPasswordModal({ title, intro, action, run }) {
+  const o = modalShell(`
+    <h2 class="text-2xl font-bold text-neutral-900">${title}</h2>
+    <p class="mt-2 text-lg text-neutral-600">${intro}</p>
+    <input data-pw type="password" class="mt-4 w-full min-h-[52px] rounded-xl border-2 border-neutral-200 px-4 text-lg" placeholder="Your safe-copy password">
+    <p data-msg class="mt-3 text-base text-red-700 hidden"></p>
+    <div class="mt-6 flex gap-3">
+      <button data-cancel class="flex-1 min-h-[52px] rounded-xl border-2 border-neutral-300 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">Cancel</button>
+      <button data-go class="flex-1 min-h-[52px] rounded-xl bg-brand-700 text-white text-lg font-semibold hover:bg-brand-800 transition">${action}</button>
+    </div>`);
+  const pw = o.querySelector("[data-pw]");
+  const msg = o.querySelector("[data-msg]");
+  o.querySelector("[data-cancel]").addEventListener("click", () => o.remove());
+  o.querySelector("[data-go]").addEventListener("click", async () => {
+    const v = pw.value.trim();
+    if (v.length < 4) {
+      msg.textContent = "Please choose a password (at least 4 characters).";
+      msg.classList.remove("hidden");
+      return;
+    }
+    const btn = o.querySelector("[data-go]");
+    btn.disabled = true;
+    btn.textContent = "Working…";
+    try {
+      await run(v);
+      o.remove();
+    } catch (e) {
+      msg.textContent = String(e).replace(/^Error:\s*/, "");
+      msg.classList.remove("hidden");
+      btn.disabled = false;
+      btn.textContent = action;
+    }
+  });
+}
+
+function openBackupEnable() {
+  backupPasswordModal({
+    title: "Keep a safe copy",
+    intro: "Choose a password for your safe copy. It's different from your 24 words. Write it down too — we can't reset it for you.",
+    action: "Turn on safe copy",
+    run: async (pw) => {
+      if (DEMO || !invoke) return;
+      await invoke("backup_enable", { password: pw });
+      loadBackupStatus();
+    },
+  });
+}
+
+function openBackupRestore() {
+  backupPasswordModal({
+    title: "Bring back your memories",
+    intro: "Enter your safe-copy password to bring all your memories back onto this computer.",
+    action: "Bring them back",
+    run: async (pw) => {
+      if (DEMO || !invoke) return;
+      await invoke("backup_restore", { password: pw });
+      await refresh();
+      loadBackupStatus();
+    },
+  });
+}
+
+on("#backup-toggle", "click", async () => {
+  let meta = { on: false };
+  if (!DEMO && invoke) {
+    try {
+      meta = await invoke("backup_status");
+    } catch (_) {}
+  }
+  if (meta && meta.on) {
+    if (!DEMO && invoke) {
+      try {
+        await invoke("backup_now");
+        loadBackupStatus();
+      } catch (_) {}
+    }
+  } else {
+    openBackupEnable();
+  }
+});
+on("#backup-restore-btn", "click", openBackupRestore);
+
+// Auto-save a fresh copy after a change (no-op if backup is off or no password is held this session).
+function autoBackup() {
+  if (!DEMO && invoke) invoke("backup_now").catch(() => {});
+}
 
 // "Start fresh" needs a deliberate press-and-hold — easy for a senior, hard to trigger by accident.
 (function wireResetHold() {
