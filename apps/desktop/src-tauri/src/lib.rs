@@ -265,6 +265,17 @@ fn lock(state: State<AppState>) {
     let _ = std::fs::remove_file(socket_path());
 }
 
+/// Start over: lock the vault, then set the old vault files **aside** (renamed, never deleted) so a
+/// fresh, empty Keepsake can be set up. Reversible — if the user later finds their 24 words, the
+/// archived files are still on disk. The only "destructive" command, and even it destroys nothing.
+#[tauri::command]
+fn reset_vault(state: State<AppState>) -> Result<(), String> {
+    lock(state); // stop serving + drop the open vault handle so the files aren't held
+    keepsake_desktop_core::archive_vault_files(&keepsake_dir(), now_unix())
+        .map(|_| ())
+        .map_err(|e| format!("could not set your old memories aside: {e}"))
+}
+
 #[tauri::command]
 fn get_sync_config() -> keepsake_desktop_core::SyncConfig {
     keepsake_desktop_core::SyncConfig::load(&sync_config_path())
@@ -413,7 +424,8 @@ pub fn run() {
             check_update,
             install_update,
             get_sync_config,
-            set_sync_config
+            set_sync_config,
+            reset_vault
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

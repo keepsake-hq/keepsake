@@ -29,11 +29,13 @@ const TRAVEL_RE = /\b(flight|fly|flying|travel|trip|berlin|hotel|airport|vacatio
 
 let SETTINGS_COUNT = 0;
 
+const AUTH_SCREENS = ["onboarding", "unlock", "lostaccess", "reset"];
 function show(id) {
-  ["onboarding", "unlock"].forEach((s) =>
-    $("#" + s).classList.toggle("hidden", s !== id),
-  );
-  const authVisible = id === "onboarding" || id === "unlock";
+  AUTH_SCREENS.forEach((s) => {
+    const el = $("#" + s);
+    if (el) el.classList.toggle("hidden", s !== id);
+  });
+  const authVisible = AUTH_SCREENS.includes(id);
   $("#auth").classList.toggle("hidden", !authVisible);
   $("#shell").classList.toggle("hidden", authVisible);
 }
@@ -439,7 +441,8 @@ async function doUnlock() {
     await runUnlock(mnemonic);
     $("#seed-input").value = "";
   } catch (e) {
-    $("#unlock-error").textContent = String(e);
+    $("#unlock-error").textContent =
+      "Those 24 words didn't open your memories. Check the spelling, or tap “I can't find my 24 words” below.";
     $("#unlock-error").classList.remove("hidden");
   } finally {
     btn.disabled = false;
@@ -577,6 +580,64 @@ $$(".nav-item").forEach((b) =>
   b.addEventListener("click", () => navTo(b.getAttribute("data-view"))),
 );
 wireSyncControls();
+
+// ---------- lost-access + start-fresh (never get stuck on the unlock screen) ----------
+const on = (sel, ev, fn) => {
+  const el = $(sel);
+  if (el) el.addEventListener(ev, fn);
+};
+on("#lostaccess-link", "click", () => show("lostaccess"));
+on("#lostaccess-back", "click", () => show("unlock"));
+on("#startfresh-link", "click", () => show("reset"));
+on("#reset-cancel", "click", () => show("unlock"));
+
+// "Start fresh" needs a deliberate press-and-hold — easy for a senior, hard to trigger by accident.
+(function wireResetHold() {
+  const btn = $("#reset-hold");
+  if (!btn) return;
+  const fill = $("#reset-hold-fill");
+  const HOLD_MS = 1600;
+  let timer, raf, start;
+  const stop = () => {
+    clearTimeout(timer);
+    cancelAnimationFrame(raf);
+    if (fill) fill.style.width = "0%";
+  };
+  const tick = () => {
+    const p = Math.min(1, (performance.now() - start) / HOLD_MS);
+    if (fill) fill.style.width = p * 100 + "%";
+    if (p < 1) raf = requestAnimationFrame(tick);
+  };
+  btn.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    start = performance.now();
+    raf = requestAnimationFrame(tick);
+    timer = setTimeout(() => {
+      stop();
+      doReset();
+    }, HOLD_MS);
+  });
+  ["pointerup", "pointerleave", "pointercancel"].forEach((ev) =>
+    btn.addEventListener(ev, stop),
+  );
+})();
+
+async function doReset() {
+  if (DEMO || !invoke) {
+    await startOnboarding();
+    return;
+  }
+  try {
+    await invoke("reset_vault");
+    await startOnboarding();
+  } catch (_) {
+    const err = $("#reset-error");
+    if (err) {
+      err.textContent = "Sorry — that didn't work just now. Please try again.";
+      err.classList.remove("hidden");
+    }
+  }
+}
 
 function debounce(fn, ms) {
   let t;

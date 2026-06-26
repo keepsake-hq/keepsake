@@ -54,6 +54,29 @@ impl SyncConfig {
     }
 }
 
+/// Set the vault files in `dir` aside with a timestamp suffix (e.g. `vault.db` →
+/// `vault-old-1700000000.db`) so the user can start fresh **without destroying** the old, still-
+/// encrypted memories. Returns the archived names created. NEVER deletes — if the user later finds
+/// their 24 words, the archived files can still be opened. Sidecars (`-wal`, `-shm`) and the sync
+/// setting move alongside so the fresh vault starts clean; absent files are simply skipped.
+pub fn archive_vault_files(dir: &std::path::Path, ts: i64) -> std::io::Result<Vec<String>> {
+    let moves = [
+        ("vault.db", format!("vault-old-{ts}.db")),
+        ("vault.db-wal", format!("vault-old-{ts}.db-wal")),
+        ("vault.db-shm", format!("vault-old-{ts}.db-shm")),
+        ("sync.json", format!("sync-old-{ts}.json")),
+    ];
+    let mut moved = Vec::new();
+    for (from, to) in moves {
+        let src = dir.join(from);
+        if src.exists() {
+            std::fs::rename(&src, dir.join(&to))?;
+            moved.push(to);
+        }
+    }
+    Ok(moved)
+}
+
 #[cfg(test)]
 mod sync_config_tests {
     use super::{SyncConfig, HOSTED_RELAY_URL};
@@ -259,5 +282,28 @@ mod tests {
         let mut v = vaulted();
         assert!(v.forget("not-hex").is_err());
         assert!(v.forget("abcd").is_err(), "too short");
+    }
+
+    #[test]
+    fn archive_vault_files_renames_aside_and_never_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        std::fs::write(p.join("vault.db"), b"db").unwrap();
+        std::fs::write(p.join("vault.db-wal"), b"wal").unwrap();
+        std::fs::write(p.join("sync.json"), b"{}").unwrap();
+        // (no -shm sidecar on purpose)
+
+        let moved = super::archive_vault_files(p, 1234).unwrap();
+
+        // The live names are gone...
+        assert!(!p.join("vault.db").exists());
+        assert!(!p.join("sync.json").exists());
+        // ...but NOTHING was destroyed — the bytes live on under the archived names.
+        assert_eq!(std::fs::read(p.join("vault-old-1234.db")).unwrap(), b"db");
+        assert!(p.join("vault-old-1234.db-wal").exists());
+        assert!(p.join("sync-old-1234.json").exists());
+        // The absent sidecar was simply skipped, not invented.
+        assert!(!p.join("vault-old-1234.db-shm").exists());
+        assert_eq!(moved.len(), 3);
     }
 }

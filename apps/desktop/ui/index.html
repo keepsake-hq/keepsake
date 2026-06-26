@@ -53,22 +53,68 @@
       </main>
 
       <!-- Unlock: returning user -->
-      <main id="unlock" class="hidden min-h-screen flex items-center justify-center px-6">
+      <main id="unlock" class="hidden min-h-screen flex items-center justify-center px-6 py-10">
         <div class="w-full max-w-md">
           <div class="text-center mb-7">
-            <span class="text-2xl font-bold tracking-tight text-neutral-900">keepsake</span>
-            <p class="mt-2 text-neutral-500">Welcome back. Unlock your vault.</p>
+            <span class="text-3xl font-bold tracking-tight text-neutral-900">keepsake</span>
+            <p class="mt-3 text-xl text-neutral-600">Welcome back. Type your 24 words to open your memories.</p>
           </div>
           <div class="bg-white border border-neutral-200/80 rounded-3xl shadow-sm p-6">
-            <label class="block text-sm font-medium text-neutral-700 mb-2">Seed phrase</label>
-            <textarea id="seed-input" rows="3" placeholder="Enter your 24 words…"
-              class="w-full resize-none rounded-xl border border-neutral-200 px-3.5 py-2.5 text-sm text-neutral-800 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-400"></textarea>
+            <label class="block text-lg font-semibold text-neutral-800 mb-2">Your 24 words</label>
+            <textarea id="seed-input" rows="3" placeholder="Type or paste your 24 words here…"
+              class="w-full resize-none rounded-xl border-2 border-neutral-200 px-4 py-3 text-lg text-neutral-900 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400"></textarea>
             <button id="unlock-btn"
-              class="mt-4 w-full rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 active:bg-brand-800 transition disabled:opacity-50">
-              Unlock
+              class="mt-4 w-full min-h-[56px] rounded-xl bg-brand-700 px-4 py-3 text-lg font-semibold text-white hover:bg-brand-800 transition disabled:opacity-50">
+              Open my memories
             </button>
-            <p id="unlock-error" class="mt-3 text-sm text-red-500 hidden"></p>
-            <p class="mt-3 text-xs text-neutral-400">Local-first &amp; end-to-end encrypted. No tracking, no AI server.</p>
+            <p id="unlock-error" class="mt-3 text-base text-red-700 hidden"></p>
+            <button id="lostaccess-link" class="mt-5 w-full text-center text-base font-medium text-brand-700 hover:text-brand-800 underline underline-offset-2">I can't find my 24 words</button>
+          </div>
+          <p class="mt-4 text-center text-base text-neutral-500">Your words never leave this computer.</p>
+        </div>
+      </main>
+
+      <!-- Lost access: never a dead end -->
+      <main id="lostaccess" class="hidden min-h-screen flex items-center justify-center px-6 py-10">
+        <div class="w-full max-w-lg">
+          <div class="text-center mb-7">
+            <h1 class="text-3xl font-bold tracking-tight text-neutral-900">Let's get you back in</h1>
+            <p class="mt-3 text-xl text-neutral-600">Pick what's true for you.</p>
+          </div>
+          <div class="space-y-3">
+            <div class="rounded-2xl border-2 border-neutral-200 bg-white p-5">
+              <div class="text-lg font-semibold text-neutral-900">I have Keepsake on another device</div>
+              <p class="mt-1 text-base text-neutral-600">If your phone or other computer still opens, you can read your 24 words there — under Settings — and type them here.</p>
+            </div>
+            <div class="rounded-2xl border-2 border-neutral-200 bg-white p-5">
+              <div class="text-lg font-semibold text-neutral-900">I gave backup copies to people I trust</div>
+              <p class="mt-1 text-base text-neutral-600">Ask them for the copies you gave them. Putting those back together here is coming in the next update.</p>
+            </div>
+            <button id="startfresh-link" class="block w-full text-left rounded-2xl border-2 border-neutral-200 bg-white p-5 hover:border-neutral-300 hover:bg-neutral-50 transition">
+              <div class="text-lg font-semibold text-neutral-900">I don't have any of these</div>
+              <p class="mt-1 text-base text-neutral-600">Start fresh with a new, empty Keepsake. Your old memories stay locked away — only your 24 words can ever open them.</p>
+            </button>
+          </div>
+          <button id="lostaccess-back" class="mt-6 w-full text-center text-base font-medium text-neutral-600 hover:text-neutral-900 underline underline-offset-2">&larr; Back</button>
+        </div>
+      </main>
+
+      <!-- Start fresh: gentle, gated, never destroys -->
+      <main id="reset" class="hidden min-h-screen flex items-center justify-center px-6 py-10">
+        <div class="w-full max-w-lg">
+          <div class="bg-white border-2 border-neutral-200 rounded-3xl shadow-sm p-8">
+            <h1 class="text-3xl font-bold tracking-tight text-neutral-900">Start fresh?</h1>
+            <p class="mt-4 text-lg text-neutral-700">This makes a brand-new, empty Keepsake on this computer. Your old memories will not appear here.</p>
+            <div class="mt-4 rounded-xl bg-brand-50 border border-brand-100 p-4 text-base text-neutral-700">
+              <span class="font-semibold text-brand-800">Nothing is destroyed.</span> Your old memories are only set aside. If you ever find your 24 words again, we can bring them back.
+            </div>
+            <p class="mt-6 text-lg font-semibold text-neutral-800">Press and hold the button to confirm</p>
+            <button id="reset-hold" class="relative mt-2 w-full min-h-[64px] overflow-hidden rounded-xl border-2 border-red-200 bg-red-50 text-lg font-semibold text-red-700 select-none touch-none">
+              <span id="reset-hold-fill" class="absolute inset-y-0 left-0 bg-red-500/25" style="width:0%"></span>
+              <span class="relative">Hold to start fresh</span>
+            </button>
+            <p id="reset-error" class="mt-3 text-base text-red-700 hidden"></p>
+            <button id="reset-cancel" class="mt-5 w-full min-h-[52px] rounded-xl border-2 border-neutral-300 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">No, take me back</button>
           </div>
         </div>
       </main>
