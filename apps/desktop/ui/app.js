@@ -407,14 +407,14 @@ async function showNoResult(q) {
 // ---------- onboarding / unlock ----------
 async function startOnboarding() {
   let phrase;
-  if (DEMO) {
-    phrase =
-      "apple river cloud stone meadow lamp window quiet garden silver paper ocean bridge candle forest gentle sunrise pocket mirror violet harbor cotton ladder compass";
+  if (DEMO || !invoke) {
+    phrase = DEMO_SEED;
   } else {
     try {
       phrase = await invoke("generate_seed");
-    } catch (e) {
-      $("#onboard-error").textContent = String(e);
+    } catch (_) {
+      $("#onboard-error").textContent =
+        "Sorry — couldn't create your key just now. Please reopen the app.";
       $("#onboard-error").classList.remove("hidden");
       return;
     }
@@ -424,13 +424,70 @@ async function startOnboarding() {
   $("#seed-grid").innerHTML = words
     .map(
       (w, i) => `
-      <div class="flex items-center gap-3 rounded-xl border border-neutral-200 bg-neutral-50/60 px-3.5 py-3">
-        <span class="text-xs text-neutral-400 w-5 tabular-nums text-right">${i + 1}</span>
-        <span class="text-sm font-medium text-neutral-800">${w}</span>
+      <div class="flex items-center gap-3 rounded-xl border border-neutral-200 bg-neutral-50/60 px-4 py-3">
+        <span class="w-6 text-right text-base tabular-nums text-neutral-400">${i + 1}</span>
+        <span class="text-lg font-medium text-neutral-800">${escapeHtml(w)}</span>
       </div>`,
     )
     .join("");
+  buildPrintSheet(words);
+  setupVerify(words);
+  $("#onboard-continue").disabled = true;
+  $("#onboard-error").classList.add("hidden");
   show("onboarding");
+}
+
+// A clean one-page sheet the user can put with their papers (shown only when printing).
+function buildPrintSheet(words) {
+  const sheet = $("#seed-print-sheet");
+  if (!sheet) return;
+  sheet.innerHTML = `
+    <h1 style="font-size:22px;font-weight:700;margin:0 0 6px">Your Keepsake key</h1>
+    <p style="margin:0 0 16px;color:#444">These 24 words are the only way to open your Keepsake. Keep this page somewhere safe, like with your important papers. Never share it.</p>
+    <ol style="columns:2;font-size:16px;line-height:2;padding-left:24px">${words.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ol>`;
+}
+
+// A real check (replaces the old "I wrote them down" checkbox): tap the correct word.
+function setupVerify(words) {
+  const n = 1 + Math.floor(Math.random() * words.length); // 1-based position
+  const correct = words[n - 1];
+  const decoys = [];
+  while (decoys.length < 2) {
+    const w = words[Math.floor(Math.random() * words.length)];
+    if (w !== correct && !decoys.includes(w)) decoys.push(w);
+  }
+  const options = [correct, ...decoys].sort(() => Math.random() - 0.5);
+  $("#verify-n").textContent = "number " + n;
+  const msg = $("#verify-msg");
+  if (msg) msg.classList.add("hidden");
+  const box = $("#verify-options");
+  box.innerHTML = options
+    .map(
+      (w) =>
+        `<button class="verify-opt min-h-[52px] rounded-xl border-2 border-neutral-300 px-6 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition" data-word="${escapeHtml(w)}">${escapeHtml(w)}</button>`,
+    )
+    .join("");
+  box.querySelectorAll(".verify-opt").forEach((b) =>
+    b.addEventListener("click", () => {
+      if (b.dataset.word === correct) {
+        box.querySelectorAll(".verify-opt").forEach((x) => (x.disabled = true));
+        b.classList.add("border-brand-500", "bg-brand-50", "text-brand-800");
+        if (msg) {
+          msg.textContent = "✓ Perfect. Your key is saved correctly.";
+          msg.className = "mt-3 text-center text-base font-medium text-brand-700";
+          msg.classList.remove("hidden");
+        }
+        $("#onboard-continue").disabled = false;
+      } else {
+        b.classList.add("border-red-300", "bg-red-50");
+        if (msg) {
+          msg.textContent = "That's not the one. Check your copy, then try again.";
+          msg.className = "mt-3 text-center text-base font-medium text-red-700";
+          msg.classList.remove("hidden");
+        }
+      }
+    }),
+  );
 }
 
 // Run unlock with a loading overlay; message depends on whether the model is local yet.
@@ -607,9 +664,6 @@ function navTo(view) {
 }
 
 // ---------- wire events ----------
-$("#seed-confirm").addEventListener("change", (e) => {
-  $("#onboard-continue").disabled = !e.target.checked;
-});
 $("#onboard-continue").addEventListener("click", doOnboardContinue);
 $("#unlock-btn").addEventListener("click", doUnlock);
 $("#seed-input").addEventListener("keydown", (e) => {
@@ -698,6 +752,20 @@ on("#reveal-seed-hide", "click", () => {
   const btn = $("#reveal-seed-btn");
   if (btn) btn.classList.remove("hidden");
 });
+
+// Onboarding: save your key by copying or printing it.
+on("#seed-copy", "click", async () => {
+  const phrase = window.__SEED__ || "";
+  try {
+    await navigator.clipboard.writeText(phrase);
+    const l = $("#seed-copy-label");
+    if (l) {
+      l.textContent = "Copied ✓";
+      setTimeout(() => (l.textContent = "Copy the words"), 2000);
+    }
+  } catch (_) {}
+});
+on("#seed-print", "click", () => window.print());
 
 // "Start fresh" needs a deliberate press-and-hold — easy for a senior, hard to trigger by accident.
 (function wireResetHold() {

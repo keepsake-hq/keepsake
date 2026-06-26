@@ -53,6 +53,23 @@ body {
   outline-offset: 2px;
   border-radius: 8px;
 }
+
+/* Printing the onboarding key: show only the clean one-page sheet, nothing else. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #seed-print-sheet,
+  #seed-print-sheet * {
+    visibility: visible;
+  }
+  #seed-print-sheet {
+    display: block !important;
+    position: fixed;
+    inset: 0;
+    padding: 2rem;
+  }
+}
 ::selection {
   background: color-mix(in srgb, var(--color-brand-500) 22%, transparent);
 }
