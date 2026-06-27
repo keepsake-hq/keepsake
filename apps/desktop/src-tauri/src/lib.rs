@@ -231,7 +231,20 @@ struct ImportResult {
     total: usize,
 }
 
-/// Scan a source for memory and return a preview (no writes). v1 source: "claude-code".
+/// Build a preview (counts by role) from a parsed item list.
+fn preview_of(items: Vec<keepsake_import::MemoryItem>) -> ImportPreview {
+    let mut roles: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for it in &items {
+        *roles.entry(it.role.clone()).or_default() += 1;
+    }
+    ImportPreview {
+        total: items.len(),
+        by_role: roles.into_iter().collect(),
+        items,
+    }
+}
+
+/// Scan a known source for memory and return a preview (no writes). v1 source: "claude-code".
 #[tauri::command]
 fn import_preview(source: String) -> Result<ImportPreview, String> {
     let home = std::path::PathBuf::from(std::env::var("HOME").map_err(|_| "no HOME".to_string())?);
@@ -239,15 +252,25 @@ fn import_preview(source: String) -> Result<ImportPreview, String> {
         "claude-code" => keepsake_import::read_claude_code(&home, &[]),
         other => return Err(format!("unknown import source: {other}")),
     };
-    let mut roles: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
-    for it in &items {
-        *roles.entry(it.role.clone()).or_default() += 1;
-    }
-    Ok(ImportPreview {
-        total: items.len(),
-        by_role: roles.into_iter().collect(),
-        items,
-    })
+    Ok(preview_of(items))
+}
+
+/// Universal: preview any folder/file/ZIP the user picked (no writes).
+#[tauri::command]
+fn import_path(path: String) -> Result<ImportPreview, String> {
+    Ok(preview_of(keepsake_import::read_path(
+        std::path::Path::new(&path),
+        "import:folder",
+    )))
+}
+
+/// Universal: preview pasted memory text (e.g. a ChatGPT/Gemini saved-memory list).
+#[tauri::command]
+fn import_paste(text: String) -> Result<ImportPreview, String> {
+    Ok(preview_of(keepsake_import::read_pasted_text(
+        &text,
+        "import:paste",
+    )))
 }
 
 /// Write previewed items into the unlocked vault through the existing dedup engine, then a
@@ -656,6 +679,7 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState(Mutex::new(None)))
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -696,6 +720,8 @@ pub fn run() {
             backup_restore,
             backup_status,
             import_preview,
+            import_path,
+            import_paste,
             import_commit
         ])
         .run(tauri::generate_context!())

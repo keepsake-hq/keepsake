@@ -1052,78 +1052,136 @@ on("#backup-restore-btn", "click", openBackupRestore);
 
 // ---------- bring your memories in (import from other AI systems) ----------
 const DEMO_IMPORT_PREVIEW = { total: 6, by_role: [["rule", 4], ["memory", 2]], items: [] };
+const pluralWord = (w, c) => (c === 1 ? w : w === "memory" ? "memories" : w + "s");
 
-async function openImport() {
-  const o = modalShell(`
-    <h2 class="text-2xl font-bold text-neutral-900">Bring your memories in</h2>
-    <p class="mt-2 text-lg text-neutral-600">Keepsake can pull in the memory you already built up in other AI tools — deduplicated and tidied automatically. Everything stays on this computer; nothing is uploaded.</p>
-    <div data-body class="mt-4"><p class="text-base text-neutral-500">Looking on this Mac…</p></div>
-    <div class="mt-6 flex gap-3">
-      <button data-cancel class="flex-1 min-h-[52px] rounded-xl border-2 border-neutral-300 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">Close</button>
-      <button data-go disabled class="flex-1 min-h-[52px] rounded-xl bg-brand-700 text-white text-lg font-semibold hover:bg-brand-800 transition disabled:opacity-40">Import</button>
-    </div>`);
-  const body = o.querySelector("[data-body]");
-  const go = o.querySelector("[data-go]");
-  o.querySelector("[data-cancel]").addEventListener("click", () => o.remove());
+function importResultHtml(res) {
+  const extra =
+    (res.skipped
+      ? `${res.skipped} ${res.skipped === 1 ? "was" : "were"} already in your vault`
+      : "") +
+    (res.merged
+      ? `${res.skipped ? ", and " : ""}${res.merged} near-duplicate${res.merged === 1 ? " was" : "s were"} merged`
+      : "");
+  return `<div class="rounded-xl border-2 border-brand-200 bg-brand-50 p-4">
+      <p class="text-lg font-semibold text-brand-800">Brought in ${res.added} ${res.added === 1 ? "memory" : "memories"}.</p>
+      ${extra ? `<p class="mt-1 text-base text-neutral-700">${extra}.</p>` : ""}
+    </div>`;
+}
 
-  let preview = DEMO_IMPORT_PREVIEW;
-  if (!DEMO && invoke) {
-    try {
-      preview = await invoke("import_preview", { source: "claude-code" });
-    } catch (e) {
-      body.innerHTML = `<p class="text-base text-red-700">Couldn't scan: ${escapeHtml(String(e))}</p>`;
-      return;
-    }
-  }
+// Render a preview into `host` with an Import button that commits it through the existing engine.
+function reviewAndImport(label, preview, host) {
   const n = preview.total || 0;
   if (n === 0) {
-    body.innerHTML = `<p class="text-base text-neutral-700">No Claude Code memory found on this Mac yet. (More sources — ChatGPT, Cursor, Obsidian, and a “drop any folder” option — are on the way.)</p>`;
+    host.innerHTML = `<p class="text-base text-neutral-600">No memories found there.</p>`;
     return;
   }
-  const plural = (w, c) => (c === 1 ? w : w === "memory" ? "memories" : w + "s");
-  const roles = (preview.by_role || [])
-    .map(([r, c]) => `${c} ${plural(r, c)}`)
-    .join(" · ");
-  body.innerHTML = `
+  const roles = (preview.by_role || []).map(([r, c]) => `${c} ${pluralWord(r, c)}`).join(" · ");
+  host.innerHTML = `
     <div class="rounded-xl border-2 border-neutral-200 p-4">
       <div class="flex items-center justify-between">
-        <span class="text-lg font-semibold text-neutral-900">Claude Code</span>
+        <span class="text-lg font-semibold text-neutral-900">${escapeHtml(label)}</span>
         <span class="text-lg font-bold text-brand-700">${n} found</span>
       </div>
-      <p class="mt-1 text-base text-neutral-600">${roles}</p>
-    </div>
-    <p class="mt-3 text-base text-neutral-500">Nothing is written until you press Import. Duplicates are merged automatically.</p>`;
-  go.textContent = `Import ${n}`;
-  go.disabled = false;
-  go.addEventListener("click", async () => {
-    go.disabled = true;
-    go.textContent = "Importing…";
-    let res = { added: 5, skipped: 1, merged: 1, total: n };
+      ${roles ? `<p class="mt-1 text-base text-neutral-600">${roles}</p>` : ""}
+      <button data-do class="mt-3 min-h-[48px] w-full rounded-xl bg-brand-700 text-white text-base font-semibold hover:bg-brand-800 transition">Import ${n}</button>
+    </div>`;
+  host.querySelector("[data-do]").addEventListener("click", async (ev) => {
+    const b = ev.currentTarget;
+    b.disabled = true;
+    b.textContent = "Importing…";
+    let res = { added: n, skipped: 0, merged: 0, total: n };
     if (!DEMO && invoke) {
       try {
         res = await invoke("import_commit", { items: preview.items });
       } catch (e) {
-        body.innerHTML += `<p class="mt-2 text-base text-red-700">${escapeHtml(String(e))}</p>`;
-        go.disabled = false;
-        go.textContent = `Import ${n}`;
+        host.innerHTML += `<p class="mt-2 text-base text-red-700">${escapeHtml(String(e))}</p>`;
         return;
       }
     }
-    const extra =
-      (res.skipped
-        ? `${res.skipped} ${res.skipped === 1 ? "was" : "were"} already in your vault`
-        : "") +
-      (res.merged
-        ? `${res.skipped ? ", and " : ""}${res.merged} near-duplicate${res.merged === 1 ? " was" : "s were"} merged`
-        : "");
-    body.innerHTML = `
-      <div class="rounded-xl border-2 border-brand-200 bg-brand-50 p-4">
-        <p class="text-lg font-semibold text-brand-800">Brought in ${res.added} ${res.added === 1 ? "memory" : "memories"}.</p>
-        ${extra ? `<p class="mt-1 text-base text-neutral-700">${extra}.</p>` : ""}
-      </div>`;
-    go.classList.add("hidden");
-    o.querySelector("[data-cancel]").textContent = "Done";
+    host.innerHTML = importResultHtml(res);
     if (typeof refresh === "function") refresh();
+  });
+}
+
+async function openImport() {
+  const o = modalShell(`
+    <h2 class="text-2xl font-bold text-neutral-900">Bring your memories in</h2>
+    <p class="mt-2 text-base text-neutral-600">Pull in the memory you built up in other AI tools — deduplicated and tidied automatically. Everything stays on this computer; nothing is uploaded.</p>
+    <div class="mt-4">
+      <h3 class="text-sm font-semibold uppercase tracking-wide text-neutral-500">On this Mac</h3>
+      <div data-claude class="mt-2"><p class="text-base text-neutral-500">Looking…</p></div>
+    </div>
+    <div class="mt-5">
+      <h3 class="text-sm font-semibold uppercase tracking-wide text-neutral-500">Bring in anything else</h3>
+      <div class="mt-2 flex flex-wrap gap-2">
+        <button data-pick-folder class="min-h-[48px] rounded-xl border-2 border-neutral-300 px-4 text-base font-semibold text-neutral-800 hover:bg-neutral-50 transition">Choose a folder…</button>
+        <button data-pick-file class="min-h-[48px] rounded-xl border-2 border-neutral-300 px-4 text-base font-semibold text-neutral-800 hover:bg-neutral-50 transition">Choose a file…</button>
+      </div>
+      <textarea data-paste rows="3" class="mt-2 w-full rounded-xl border-2 border-neutral-200 p-3 text-base" placeholder="…or paste your saved memory here — one fact per line"></textarea>
+      <button data-paste-go class="min-h-[44px] text-base font-semibold text-brand-700 hover:text-brand-800 transition">Bring in pasted text</button>
+      <div data-other class="mt-2"></div>
+    </div>
+    <div class="mt-6"><button data-close class="min-h-[48px] w-full rounded-xl border-2 border-neutral-300 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">Close</button></div>`);
+  o.querySelector("[data-close]").addEventListener("click", () => o.remove());
+  const other = o.querySelector("[data-other]");
+
+  // 1. Auto-detect Claude Code on this Mac.
+  const claudeHost = o.querySelector("[data-claude]");
+  let cp = DEMO_IMPORT_PREVIEW;
+  if (!DEMO && invoke) {
+    try {
+      cp = await invoke("import_preview", { source: "claude-code" });
+    } catch (_) {
+      cp = { total: 0 };
+    }
+  }
+  if ((cp.total || 0) === 0) {
+    claudeHost.innerHTML = `<p class="text-base text-neutral-600">No Claude Code memory found.</p>`;
+  } else {
+    reviewAndImport("Claude Code", cp, claudeHost);
+  }
+
+  // 2. Folder / file picker (native dialog → Rust reads the path).
+  const pick = async (directory) => {
+    const dlg = window.__TAURI__ && window.__TAURI__.dialog;
+    if (!dlg || !invoke) {
+      other.innerHTML = `<p class="text-base text-neutral-500">Picking files works in the installed Keepsake app.</p>`;
+      return;
+    }
+    const path = await dlg.open({ directory, multiple: false });
+    if (!path) return;
+    other.innerHTML = `<p class="text-base text-neutral-500">Reading…</p>`;
+    try {
+      const pv = await invoke("import_path", { path });
+      const label = String(path).split("/").filter(Boolean).pop() || "Selection";
+      reviewAndImport(label, pv, other);
+    } catch (e) {
+      other.innerHTML = `<p class="text-base text-red-700">${escapeHtml(String(e))}</p>`;
+    }
+  };
+  o.querySelector("[data-pick-folder]").addEventListener("click", () => pick(true));
+  o.querySelector("[data-pick-file]").addEventListener("click", () => pick(false));
+
+  // 3. Paste box.
+  o.querySelector("[data-paste-go]").addEventListener("click", async () => {
+    const text = o.querySelector("[data-paste]").value;
+    if (!text.trim()) return;
+    let pv;
+    if (!DEMO && invoke) {
+      try {
+        pv = await invoke("import_paste", { text });
+      } catch (e) {
+        other.innerHTML = `<p class="text-base text-red-700">${escapeHtml(String(e))}</p>`;
+        return;
+      }
+    } else {
+      const lines = text
+        .split("\n")
+        .map((s) => s.replace(/^[-*•\s]+/, "").trim())
+        .filter((s) => s.length >= 3);
+      pv = { total: lines.length, by_role: [["memory", lines.length]], items: [] };
+    }
+    reviewAndImport("Pasted text", pv, other);
   });
 }
 
