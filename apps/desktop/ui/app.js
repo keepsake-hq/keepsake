@@ -1142,13 +1142,47 @@ const DEMO_MEMORIES = (() => {
   ];
 })();
 
-// ---------- self-update ----------
-async function checkForUpdate() {
-  if (DEMO || !invoke) return;
+// ---------- self-update (manual only — the app never checks on its own) ----------
+// Triggered solely by the "Check for updates" button in Settings, so the only network call the
+// app ever makes is one the user explicitly asked for. Keeps the no-telemetry promise honest.
+async function runUpdateCheck() {
+  const status = $("#update-status");
+  const btn = $("#update-check-btn");
+  if (DEMO || !invoke) {
+    if (status) {
+      status.textContent = "You're up to date.";
+      status.classList.remove("hidden");
+    }
+    return;
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Checking…";
+  }
   try {
     const version = await invoke("check_update");
-    if (version) showUpdateBanner(version);
-  } catch (_) {}
+    if (version) {
+      if (status) {
+        status.textContent = "Update " + version + " is available.";
+        status.className = "mt-2 text-base font-medium text-brand-700";
+      }
+      showUpdateBanner(version);
+    } else if (status) {
+      status.textContent = "You're up to date.";
+      status.className = "mt-2 text-base font-medium text-neutral-500";
+    }
+  } catch (_) {
+    if (status) {
+      status.textContent = "Couldn't check right now — check your internet and try again.";
+      status.className = "mt-2 text-base font-medium text-red-700";
+    }
+  } finally {
+    if (status) status.classList.remove("hidden");
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Check for updates";
+    }
+  }
 }
 
 function showUpdateBanner(version) {
@@ -1158,24 +1192,26 @@ function showUpdateBanner(version) {
   bar.className =
     "fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-3 bg-brand-600 text-white text-sm py-2 px-4 shadow-md";
   bar.innerHTML =
-    `<span>Update <b>${escapeHtml(version)}</b> ist verfügbar.</span>` +
-    `<button id="update-now" class="rounded-md bg-white text-brand-700 hover:bg-brand-50 px-3 py-1 font-medium transition">Jetzt aktualisieren</button>` +
-    `<button id="update-later" class="text-white text-xs hover:underline">Später</button>`;
+    `<span>Update <b>${escapeHtml(version)}</b> is available.</span>` +
+    `<button id="update-now" class="rounded-md bg-white text-brand-700 hover:bg-brand-50 px-3 py-1 font-medium transition">Update now</button>` +
+    `<button id="update-later" class="text-white text-xs hover:underline">Later</button>`;
   document.body.appendChild(bar);
   $("#update-now").addEventListener("click", async () => {
     const btn = $("#update-now");
-    btn.textContent = "Lädt & installiert…";
+    btn.textContent = "Downloading & installing…";
     btn.disabled = true;
     try {
       // On success the app downloads, verifies the signature, installs, and restarts.
       await invoke("install_update");
     } catch (_) {
-      btn.textContent = "Fehler — später erneut";
+      btn.textContent = "Failed — try again later";
       btn.disabled = false;
     }
   });
   $("#update-later").addEventListener("click", () => bar.remove());
 }
+
+on("#update-check-btn", "click", runUpdateCheck);
 
 // ---------- boot ----------
 (async () => {
@@ -1193,7 +1229,8 @@ function showUpdateBanner(version) {
     }
     return;
   }
-  checkForUpdate(); // fire-and-forget: show a banner if a signed update is available
+  // No automatic update check on startup — updates are checked only when the user presses the
+  // "Check for updates" button in Settings, so the app makes no network call it wasn't asked to.
   try {
     const isLocked = await invoke("locked");
     if (!isLocked) {

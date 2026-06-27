@@ -337,6 +337,16 @@
               </div>
             </div>
 
+            <!-- Updates (manual + honest: no automatic network call on startup) -->
+            <div class="bg-white border-2 border-neutral-200 rounded-2xl p-5">
+              <h2 class="text-lg font-semibold text-neutral-900">Updates</h2>
+              <p class="mt-1 text-base text-neutral-600">Keepsake never phones home. The only time it reaches the internet for updates is when you press this button.</p>
+              <p id="update-status" class="mt-2 text-base font-medium text-neutral-500 hidden"></p>
+              <div class="mt-3">
+                <button id="update-check-btn" class="min-h-[48px] inline-flex items-center rounded-xl border-2 border-neutral-300 px-5 text-base font-semibold text-neutral-800 hover:bg-neutral-50 transition">Check for updates</button>
+              </div>
+            </div>
+
             <!-- For helpers & techies (advanced; quarantined away from the grandma surface) -->
             <details class="bg-white border-2 border-neutral-200 rounded-2xl p-5">
               <summary class="text-lg font-semibold text-neutral-900 cursor-pointer select-none">For helpers &amp; techies</summary>
