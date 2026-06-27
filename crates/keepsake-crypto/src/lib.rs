@@ -13,7 +13,7 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Errors surfaced by the crypto core.
 #[derive(Debug, PartialEq, Eq)]
@@ -29,6 +29,10 @@ pub enum CryptoError {
 ///
 /// Each root is an independent 32-byte key; knowledge of one reveals nothing
 /// about the others (HKDF domain separation via distinct `info` strings).
+///
+/// Wiped from memory on drop (`ZeroizeOnDrop`), so a long-lived unlocked session does not leave
+/// raw root key material lingering in freed pages / swap / a core dump.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct RootKeys {
     /// Root for ML-DSA identity / operation signing keys.
     pub signing_root: [u8; 32],
@@ -50,6 +54,19 @@ pub fn generate_mnemonic() -> String {
         .to_string();
     entropy.zeroize();
     phrase
+}
+
+/// Constant-time byte-slice equality: compares every byte with no early-out, so a mismatch can't be
+/// located by timing. Use for verifying secrets / codes (e.g. the pairing SAS) instead of `==`.
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 impl RootKeys {
@@ -126,6 +143,10 @@ impl RootKeys {
 }
 
 /// Key-encryption-key (KEK): wraps per-cell DEKs. Derived from `encryption_root`.
+///
+/// Wiped from memory on drop (`ZeroizeOnDrop`): the KEK is the master that unwraps every cell, so it
+/// must not survive in freed memory after a vault is locked.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Kek([u8; 32]);
 
 /// An encrypted cell payload. Inert without the matching [`WrappedDek`].
@@ -738,6 +759,22 @@ mod tests {
 
     // Standard BIP-39 256-bit test vector (zero entropy), 24 words.
     const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+
+    // Compile-time guarantee that the long-lived key types wipe themselves on drop.
+    #[test]
+    fn long_lived_key_types_zeroize_on_drop() {
+        fn assert_zod<T: ZeroizeOnDrop>() {}
+        assert_zod::<Kek>();
+        assert_zod::<RootKeys>();
+    }
+
+    #[test]
+    fn ct_eq_matches_equality_but_in_constant_time() {
+        assert!(ct_eq(b"123456", b"123456"));
+        assert!(!ct_eq(b"123456", b"123450"));
+        assert!(!ct_eq(b"12345", b"123456"), "different lengths are unequal");
+        assert!(ct_eq(b"", b""));
+    }
 
     #[test]
     fn generated_mnemonic_is_24_unique_valid_words() {

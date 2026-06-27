@@ -517,7 +517,7 @@ fn main() {
                 std::io::stdin()
                     .read_line(&mut typed)
                     .expect("read confirmation");
-                if typed.trim() != sas {
+                if !keepsake_crypto::ct_eq(typed.trim().as_bytes(), sas.as_bytes()) {
                     let _ = std::fs::remove_file(pairing_file());
                     eprintln!("❌ Verification code mismatch — aborting. Do NOT trust this offer.");
                     std::process::exit(1);

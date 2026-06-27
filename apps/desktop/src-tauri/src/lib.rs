@@ -41,11 +41,11 @@ struct Session {
     sync_ctx: SyncCtx,
     sync: Option<tauri::async_runtime::JoinHandle<()>>,
     /// The 24 words, held while unlocked so Settings can show them again (like a hardware wallet's
-    /// "reveal recovery phrase"). Dropped on lock — never written to disk.
-    mnemonic: String,
+    /// "reveal recovery phrase"). Dropped on lock — never written to disk; wiped from memory on drop.
+    mnemonic: zeroize::Zeroizing<String>,
     /// The safe-copy (backup) password, held after the user turns backup on, so fresh copies +
-    /// restore don't re-ask. Dropped on lock — never written to disk.
-    backup_password: Option<String>,
+    /// restore don't re-ask. Dropped on lock — never written to disk; wiped from memory on drop.
+    backup_password: Option<zeroize::Zeroizing<String>>,
 }
 
 /// Session state: `None` while locked, `Some` once a seed has been entered.
@@ -133,7 +133,7 @@ async fn backup_enable(state: State<'_, AppState>, password: String) -> Result<(
     {
         let mut guard = state.0.lock().unwrap();
         if let Some(session) = guard.as_mut() {
-            session.backup_password = Some(password);
+            session.backup_password = Some(zeroize::Zeroizing::new(password));
         }
     }
     keepsake_desktop_core::BackupMeta {
@@ -395,7 +395,7 @@ fn unlock(
         daemon,
         sync_ctx,
         sync,
-        mnemonic: mnemonic.trim().to_string(),
+        mnemonic: zeroize::Zeroizing::new(mnemonic.trim().to_string()),
         backup_password: None,
     });
     Ok(status)
@@ -430,7 +430,7 @@ fn reset_vault(state: State<AppState>) -> Result<(), String> {
 fn reveal_seed(state: State<AppState>) -> Result<String, String> {
     let guard = state.0.lock().unwrap();
     let session = guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
-    Ok(session.mnemonic.clone())
+    Ok(session.mnemonic.to_string())
 }
 
 /// Social recovery — split the 24 words into pieces for trusted people. Needs the vault unlocked.

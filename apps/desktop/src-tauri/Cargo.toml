@@ -32,3 +32,4 @@ keepsake-daemon = { path = "../../../crates/keepsake-daemon" }
 keepsake-desktop-core = { path = "../../../crates/keepsake-desktop-core" }
 keepsake-relay = { path = "../../../crates/keepsake-relay" }
 keepsake-backup = { path = "../../../crates/keepsake-backup" }
+zeroize = "1"
