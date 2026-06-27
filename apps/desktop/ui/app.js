@@ -535,6 +535,119 @@ function setupVerify(words) {
 }
 
 // Run unlock with a loading overlay; message depends on whether the model is local yet.
+// ---------- 24-word seed boxes (unlock) ----------
+const BIP39 = window.BIP39_WORDS || [];
+const BIP39_SET = new Set(BIP39);
+
+function seedBoxInputs() {
+  return $$("#seed-boxes input");
+}
+function seedBoxWords() {
+  return seedBoxInputs().map((i) => i.value.trim().toLowerCase());
+}
+function validateSeedBox(input) {
+  const v = input.value.trim().toLowerCase();
+  const bad = v !== "" && !BIP39_SET.has(v);
+  input.classList.toggle("border-red-400", bad);
+  input.classList.toggle("border-line", !bad);
+}
+function updateUnlockState() {
+  const words = seedBoxWords();
+  const ready = words.length === 24 && words.every((w) => BIP39_SET.has(w));
+  const btn = $("#unlock-btn");
+  if (btn) btn.disabled = !ready;
+}
+function fillSeedBoxes(words, startIdx) {
+  const inputs = seedBoxInputs();
+  words.forEach((w, k) => {
+    const idx = (startIdx || 0) + k;
+    if (idx < inputs.length) inputs[idx].value = w.toLowerCase();
+  });
+  inputs.forEach(validateSeedBox);
+  updateUnlockState();
+  const firstEmpty = inputs.find((i) => !i.value.trim());
+  (firstEmpty || inputs[inputs.length - 1]).focus();
+}
+function setupSeedBoxes() {
+  const wrap = $("#seed-boxes");
+  if (!wrap) return;
+  const dl = $("#bip39-list");
+  if (dl && !dl.children.length && BIP39.length) {
+    dl.innerHTML = BIP39.map((w) => `<option value="${w}"></option>`).join("");
+  }
+  wrap.innerHTML = "";
+  for (let i = 0; i < 24; i++) {
+    const cell = document.createElement("div");
+    cell.className = "relative";
+    cell.innerHTML =
+      `<span class="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted tabular-nums select-none pointer-events-none">${i + 1}</span>` +
+      `<input data-i="${i}" list="bip39-list" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Word ${i + 1}" class="w-full pl-7 pr-2 py-2 rounded-lg border-2 border-line text-base text-ink bg-surface focus:outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-500/30" />`;
+    wrap.appendChild(cell);
+  }
+  seedBoxInputs().forEach((input, i, inputs) => {
+    input.addEventListener("input", () => {
+      validateSeedBox(input);
+      updateUnlockState();
+    });
+    input.addEventListener("paste", (e) => {
+      const text = (e.clipboardData || window.clipboardData).getData("text") || "";
+      const words = text.trim().split(/\s+/).filter(Boolean);
+      if (words.length > 1) {
+        e.preventDefault();
+        fillSeedBoxes(words, i);
+      }
+    });
+    input.addEventListener("keydown", (e) => {
+      if ((e.key === " " || e.key === "Enter") && input.value.trim()) {
+        e.preventDefault();
+        if (i < inputs.length - 1) inputs[i + 1].focus();
+        else if (!$("#unlock-btn").disabled) doUnlock();
+      } else if (e.key === "Backspace" && !input.value && i > 0) {
+        e.preventDefault();
+        inputs[i - 1].focus();
+      }
+    });
+  });
+}
+setupSeedBoxes();
+
+(() => {
+  const sp = $("#seed-paste");
+  if (sp)
+    sp.addEventListener("click", async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        const words = (text || "").trim().split(/\s+/).filter(Boolean);
+        if (words.length) fillSeedBoxes(words, 0);
+      } catch (_) {}
+    });
+  // Updates must be reachable BEFORE login, so a locked-out user is never trapped — a visible,
+  // user-initiated check (never a silent ping), placed on the unlock screen itself.
+  const uc = $("#unlock-update-check");
+  if (uc)
+    uc.addEventListener("click", async () => {
+      const status = $("#unlock-update-status");
+      if (DEMO || !invoke) {
+        if (status) status.textContent = "You're up to date.";
+        return;
+      }
+      uc.textContent = "Checking…";
+      try {
+        const v = await invoke("check_update");
+        if (v) {
+          showUpdateBanner(v);
+          if (status) status.textContent = "Update " + v + " is available — see the banner up top.";
+        } else if (status) {
+          status.textContent = "You're up to date.";
+        }
+      } catch (_) {
+        if (status) status.textContent = "Couldn't check — check your internet.";
+      } finally {
+        uc.textContent = "Check for updates";
+      }
+    });
+})();
+
 async function runUnlock(mnemonic) {
   let ready = true;
   try {
@@ -574,20 +687,22 @@ async function doOnboardContinue() {
 }
 
 async function doUnlock() {
-  const mnemonic = $("#seed-input").value.trim();
+  const mnemonic = seedBoxWords().join(" ").trim();
   if (!mnemonic) return;
   const btn = $("#unlock-btn");
   btn.disabled = true;
   $("#unlock-error").classList.add("hidden");
   try {
     await runUnlock(mnemonic);
-    $("#seed-input").value = "";
+    seedBoxInputs().forEach((i) => {
+      i.value = "";
+    });
   } catch (e) {
     $("#unlock-error").textContent =
       "Those 24 words didn't open your memories. Check the spelling, or tap “I can't find my 24 words” below.";
     $("#unlock-error").classList.remove("hidden");
   } finally {
-    btn.disabled = false;
+    updateUnlockState();
   }
 }
 
@@ -712,9 +827,6 @@ function navTo(view) {
 // ---------- wire events ----------
 $("#onboard-continue").addEventListener("click", doOnboardContinue);
 $("#unlock-btn").addEventListener("click", doUnlock);
-$("#seed-input").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) doUnlock();
-});
 $("#remember-btn").addEventListener("click", doRemember);
 $("#remember-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") doRemember();
