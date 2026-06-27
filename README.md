@@ -61,12 +61,17 @@ The desktop app is a calm, light, Apple/Notion-style space — not another neon 
 
 Grab `Keepsake_x.y.z_aarch64.dmg` from the [latest release](https://github.com/keepsake-hq/keepsake/releases), open it, and drag Keepsake to Applications.
 
-**First launch — the unsigned-app step.** Keepsake is intentionally **not** notarized by Apple. Notarizing requires a paid Apple Developer account that ties the app to a legal identity, and this project ships anonymously on purpose. So the binary is **ad-hoc signed**, and macOS Gatekeeper will refuse the first double-click. To run it:
+**First launch — the unsigned-app step.** Keepsake is intentionally **not** notarized by Apple. Notarizing requires a paid Apple Developer account that ties the app to a legal identity, and this project ships anonymously on purpose. So the binary is **ad-hoc signed**, and macOS Gatekeeper blocks the first launch with *"Apple could not verify Keepsake is free of malware."* That's expected — here's how to allow it (just once):
 
-1. **Right-click** (or Control-click) the Keepsake app → **Open**.
-2. In the dialog, click **Open** again.
+**Recent macOS (Sequoia / 15 and newer):** the old right-click→Open trick no longer works. Double-click Keepsake (you'll get the block — click **Done**, **not** "Move to Trash"), then open **System Settings → Privacy & Security**, scroll to the bottom, and click **"Open Anyway"** next to the Keepsake message; confirm with Touch ID / your password.
 
-…or: **System Settings → Privacy & Security → "Open Anyway"**. You only do this once. (Prefer zero trust in our binary? [Build it yourself](#build-it-yourself) — it's the same result.)
+**Fast path (any macOS) — one Terminal command** that clears the quarantine flag, after which Keepsake opens with a normal double-click:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Keepsake.app
+```
+
+(On **older** macOS you can instead **right-click → Open → Open**.) Prefer zero trust in our binary? [Build it yourself](#build-it-yourself) — it's the same result.
 
 > First unlock downloads the local embedding model once (~500 MB) into `~/.keepsake/models`; after that the app runs **fully offline**, forever. Nothing about this download identifies you.
 
