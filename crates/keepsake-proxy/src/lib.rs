@@ -375,12 +375,13 @@ impl MemorySource {
                     }
                 }
                 texts.extend(
-                    v.recall_with_graph(
+                    v.recall_with_profile(
                         kek,
                         query,
                         k,
                         now_unix() as i64,
-                        keepsake_vault::RecencyParams::default(),
+                        // The proxy injects graph-enriched context by default (most grounding).
+                        keepsake_vault::RecallProfile::GraphFirst,
                     )
                     .map_err(|e| format!("{e:?}"))?
                     .into_iter()

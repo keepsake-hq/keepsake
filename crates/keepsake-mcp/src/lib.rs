@@ -85,7 +85,25 @@ impl<E: Embedder> ToolRouter<E> {
             "saihm_recall" => {
                 let query = args["query"].as_str().unwrap_or("");
                 let k = args["k"].as_u64().unwrap_or(4) as usize;
-                match self.vault.recall(&self.kek, query, k) {
+                // Optional named recall mode (balanced|semantic|recent|graph_first). Absent → the
+                // default cosine recall, unchanged.
+                let result = match args["profile"].as_str() {
+                    Some(p) => {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0);
+                        self.vault.recall_with_profile(
+                            &self.kek,
+                            query,
+                            k,
+                            now,
+                            keepsake_vault::RecallProfile::parse(p),
+                        )
+                    }
+                    None => self.vault.recall(&self.kek, query, k),
+                };
+                match result {
                     Ok(hits) => json!({
                         "hits": hits
                             .iter()

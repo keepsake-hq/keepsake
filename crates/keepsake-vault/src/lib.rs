@@ -98,6 +98,53 @@ impl RecencyParams {
     }
 }
 
+/// A named recall strategy: it picks how strongly recency competes with similarity, and whether the
+/// knowledge graph enriches the result — so a caller can choose a retrieval mode per question
+/// without hand-tuning weights. Every strategy scores over Keepsake's existing **local** signals
+/// (semantic similarity, recency, and — for `GraphFirst` — graph connectivity); none add a server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RecallProfile {
+    /// Relevance leads, recency breaks ties and nudges (the default): a newer memory edges out an
+    /// equally-relevant older one.
+    #[default]
+    Balanced,
+    /// Pure relevance, age-blind — "find whatever is most relevant, no matter how old".
+    Semantic,
+    /// Recency leads — "what's the latest on X". Short half-life + low floor, so stale memories fade.
+    Recent,
+    /// Balanced ranking, then also pulls in memories the knowledge graph connects to the query.
+    GraphFirst,
+}
+
+impl RecallProfile {
+    /// Parse a profile name (case-insensitive). Unknown / empty falls back to [`RecallProfile::Balanced`].
+    pub fn parse(s: &str) -> RecallProfile {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "semantic" => RecallProfile::Semantic,
+            "recent" => RecallProfile::Recent,
+            "graph" | "graph_first" | "graph-first" | "graphfirst" => RecallProfile::GraphFirst,
+            _ => RecallProfile::Balanced,
+        }
+    }
+
+    /// The recency curve this profile applies on top of the cosine score.
+    fn recency(self) -> RecencyParams {
+        match self {
+            // Age-blind: a flat floor of 1.0 makes the recency multiplier always 1.0.
+            RecallProfile::Semantic => RecencyParams {
+                half_life_secs: f64::INFINITY,
+                floor: 1.0,
+            },
+            // Recency dominates: 14-day half-life + low floor so stale memories drop away fast.
+            RecallProfile::Recent => RecencyParams {
+                half_life_secs: 14.0 * 24.0 * 60.0 * 60.0,
+                floor: 0.1,
+            },
+            RecallProfile::Balanced | RecallProfile::GraphFirst => RecencyParams::default(),
+        }
+    }
+}
+
 /// A semantic memory vault over a [`SqliteVault`] and a local [`Embedder`].
 pub struct MemoryVault<E: Embedder> {
     store: SqliteVault,
@@ -452,6 +499,25 @@ impl<E: Embedder> MemoryVault<E> {
         Ok(out)
     }
 
+    /// Recall using a named [`RecallProfile`] — the unifying entry point for callers that expose a
+    /// retrieval mode. The profile selects the recency curve and whether the knowledge graph
+    /// enriches the result; everything stays local to the encrypted vault.
+    pub fn recall_with_profile(
+        &self,
+        kek: &Kek,
+        query: &str,
+        k: usize,
+        now: i64,
+        profile: RecallProfile,
+    ) -> Result<Vec<(CellId, String)>, StoreError> {
+        match profile {
+            RecallProfile::GraphFirst => {
+                self.recall_with_graph(kek, query, k, now, profile.recency())
+            }
+            _ => self.recall_ranked(kek, query, k, now, profile.recency()),
+        }
+    }
+
     /// Erase a memory: forget the content (cryptographic erasure) and drop its
     /// embedding from the index.
     pub fn forget(&mut self, id: &CellId) -> Result<(), StoreError> {
@@ -690,6 +756,48 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].0, new, "the newer memory ranks first");
         assert_eq!(hits[1].0, old, "the older one second");
+    }
+
+    #[test]
+    fn recall_profiles_parse_and_shape_the_recency_curve() {
+        use RecallProfile::*;
+        assert_eq!(RecallProfile::parse("semantic"), Semantic);
+        assert_eq!(RecallProfile::parse("RECENT"), Recent);
+        assert_eq!(RecallProfile::parse("graph_first"), GraphFirst);
+        assert_eq!(RecallProfile::parse(""), Balanced);
+        assert_eq!(RecallProfile::parse("nonsense"), Balanced);
+
+        let year = 365.0 * 86_400.0;
+        // Semantic is age-blind: even an ancient memory keeps full weight.
+        assert!((Semantic.recency().weight(year) - 1.0).abs() < 1e-6);
+        // Recent lets recency dominate: a one-year-old memory decays far harder than under Balanced.
+        assert!(Recent.recency().weight(year) < Balanced.recency().weight(year));
+        // ...but never below the profile's own floor.
+        assert!(Recent.recency().weight(year) >= Recent.recency().floor);
+    }
+
+    #[test]
+    fn recall_with_profile_dispatches_over_existing_signals() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        let now = 1_700_000_000i64;
+        let day = 86_400i64;
+        vault
+            .remember_at(&kek, "alpha alpha alpha", now - 365 * day)
+            .unwrap();
+        let new = vault.remember_at(&kek, "alpha alpha alpha", now).unwrap();
+
+        // Balanced keeps recency-ranked behaviour: the newer of two equally-similar hits leads.
+        let balanced = vault
+            .recall_with_profile(&kek, "alpha alpha alpha", 2, now, RecallProfile::Balanced)
+            .unwrap();
+        assert_eq!(balanced[0].0, new, "Balanced ranks the newer memory first");
+
+        // GraphFirst dispatches to the graph-enriched path and still returns the vector hits.
+        let graph = vault
+            .recall_with_profile(&kek, "alpha alpha alpha", 2, now, RecallProfile::GraphFirst)
+            .unwrap();
+        assert!(graph.len() >= 2, "GraphFirst returns at least the vector hits");
     }
 
     #[test]

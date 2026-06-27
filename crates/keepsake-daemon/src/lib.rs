@@ -12,7 +12,7 @@ use keepsake_core::CellId;
 use keepsake_crypto::Kek;
 use keepsake_firewall::capability::{Authorization, CapabilityToken};
 use keepsake_retrieval::Embedder;
-use keepsake_vault::{MemoryVault, RecencyParams};
+use keepsake_vault::{MemoryVault, RecallProfile};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 #[cfg(unix)]
@@ -149,13 +149,16 @@ impl<E: Embedder> DaemonState<E> {
         let k = caller.clamp_records(k);
         let vault = self.vault.lock().expect("vault mutex poisoned");
         let now = unix_now() as i64;
-        // Opt-in graph enrichment (`params.graph == true`): also surface memories connected
-        // through the knowledge graph to an entity in the query. Default stays pure-vector.
-        let result = if params.get("graph").and_then(Value::as_bool).unwrap_or(false) {
-            vault.recall_with_graph(&self.kek, query, k, now, RecencyParams::default())
-        } else {
-            vault.recall_ranked(&self.kek, query, k, now, RecencyParams::default())
+        // Named recall profile (`params.profile`: balanced|semantic|recent|graph_first). The legacy
+        // `params.graph == true` still maps to the graph-enriched profile. Default stays Balanced.
+        let profile = match params.get("profile").and_then(Value::as_str) {
+            Some(p) => RecallProfile::parse(p),
+            None if params.get("graph").and_then(Value::as_bool).unwrap_or(false) => {
+                RecallProfile::GraphFirst
+            }
+            None => RecallProfile::Balanced,
         };
+        let result = vault.recall_with_profile(&self.kek, query, k, now, profile);
         match result {
             Ok(hits) => {
                 let mut hits: Vec<Value> = hits

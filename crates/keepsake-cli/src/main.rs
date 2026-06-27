@@ -32,6 +32,9 @@ enum Cmd {
         query: String,
         #[arg(long, default_value_t = 5)]
         k: usize,
+        /// Recall mode: balanced (default), semantic, recent, or graph_first.
+        #[arg(long, default_value = "balanced")]
+        profile: String,
     },
     /// Cryptographically erase a memory by its cell id (hex).
     Forget { cell_id: String },
@@ -184,9 +187,15 @@ fn main() {
             let id = vault.remember(&kek, &text).expect("remember");
             println!("{}", hex::encode(id.as_bytes()));
         }
-        Cmd::Recall { query, k } => {
+        Cmd::Recall { query, k, profile } => {
             let (vault, kek) = load();
-            let hits = vault.recall(&kek, &query, k).expect("recall");
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let hits = vault
+                .recall_with_profile(&kek, &query, k, now, keepsake_vault::RecallProfile::parse(&profile))
+                .expect("recall");
             if hits.is_empty() {
                 eprintln!("(no memories matched)");
             }
