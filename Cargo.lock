@@ -2057,6 +2057,7 @@ dependencies = [
  "keepsake-graph",
  "keepsake-retrieval",
  "keepsake-store-sqlite",
+ "serde_json",
  "tempfile",
 ]
 

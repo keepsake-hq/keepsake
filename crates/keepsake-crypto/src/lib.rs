@@ -230,6 +230,26 @@ impl Kek {
         dek.zeroize();
         Ok(plaintext)
     }
+
+    /// A seed-keyed tag of `data` for LOCAL exact-duplicate detection. HMAC-SHA256 under a key
+    /// derived from this KEK, so the tag is meaningless to anyone without the seed and identical
+    /// plaintext in two different vaults yields different tags — it is **not** a global fingerprint
+    /// or a confirm-by-guess equality oracle. MUST stay local: never synced, never exported, or it
+    /// would leak (see AGENTS.md "keyed-or-it-leaks").
+    pub fn content_tag(&self, data: &[u8]) -> [u8; 32] {
+        let hk = Hkdf::<Sha256>::new(None, &self.0);
+        let mut tag_key = [0u8; 32];
+        hk.expand(b"keepsake/v1/dedup-tag", &mut tag_key)
+            .expect("32 bytes is a valid HKDF-SHA256 output length");
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&tag_key)
+            .expect("HMAC accepts a key of any length");
+        Mac::update(&mut mac, data);
+        let out = Mac::finalize(mac).into_bytes();
+        tag_key.zeroize();
+        let mut tag = [0u8; 32];
+        tag.copy_from_slice(&out);
+        tag
+    }
 }
 
 /// An X25519 keypair for sharing — wrapping a DEK to a grantee's public key.
@@ -774,6 +794,23 @@ mod tests {
         assert!(!ct_eq(b"123456", b"123450"));
         assert!(!ct_eq(b"12345", b"123456"), "different lengths are unequal");
         assert!(ct_eq(b"", b""));
+    }
+
+    #[test]
+    fn content_tag_is_keyed_deterministic_and_not_a_global_fingerprint() {
+        let kek_a = Kek::from_root(&RootKeys::from_mnemonic(TEST_MNEMONIC, "").unwrap().encryption_root);
+        // Same vault + same data → same tag (so an exact re-send can be detected).
+        assert_eq!(kek_a.content_tag(b"my PIN is 1234"), kek_a.content_tag(b"my PIN is 1234"));
+        // Different data → different tag.
+        assert_ne!(kek_a.content_tag(b"my PIN is 1234"), kek_a.content_tag(b"my PIN is 5678"));
+        // Different vault (different seed) → different tag for the SAME data: not a global oracle.
+        let other = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+        let kek_b = Kek::from_root(&RootKeys::from_mnemonic(other, "").unwrap().encryption_root);
+        assert_ne!(
+            kek_a.content_tag(b"my PIN is 1234"),
+            kek_b.content_tag(b"my PIN is 1234"),
+            "the same plaintext must not produce the same tag across vaults"
+        );
     }
 
     #[test]

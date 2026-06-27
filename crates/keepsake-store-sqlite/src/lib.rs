@@ -115,7 +115,8 @@ impl SqliteVault {
                  valid_to    INTEGER,
                  UNIQUE(source_cell, subject, relation, object)
              );
-             CREATE TABLE IF NOT EXISTS meta_text (k TEXT PRIMARY KEY, v TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS meta_text (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS dedup_tags (tag BLOB PRIMARY KEY, cell_id BLOB NOT NULL);",
         )?;
         // Back-fill the column on vaults created before `created_at` existed; errors
         // (the column already exists) are expected and ignored.
@@ -284,10 +285,45 @@ impl SqliteVault {
         // Erasure-honest: a removed memory must not linger inside the derived profile summary.
         self.conn
             .execute("DELETE FROM meta_text WHERE k = 'profile'", [])?;
+        // Drop the local exact-dup tag for this cell, so re-saving the same text after a forget
+        // stores it fresh instead of mapping to the now-erased cell.
+        self.conn
+            .execute("DELETE FROM dedup_tags WHERE cell_id = ?1", params![idb])?;
         // Flush committed frames into the db and truncate the WAL to zero, so the
         // pre-delete page image of the wrapped DEK does not linger on disk.
         self.conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
+    }
+
+    /// Look up the cell a previously-seen exact plaintext maps to, by its **local** seed-keyed tag
+    /// (see `keepsake_crypto::Kek::content_tag`). `None` if this exact text hasn't been stored. The
+    /// tag table is local-only — never synced, never exported (AGENTS.md "keyed-or-it-leaks").
+    pub fn dedup_lookup(&self, tag: &[u8; 32]) -> Result<Option<CellId>, StoreError> {
+        let v: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT cell_id FROM dedup_tags WHERE tag = ?1",
+                params![tag.as_slice()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match v {
+            Some(bytes) => {
+                let arr: [u8; 32] = bytes.as_slice().try_into().map_err(|_| StoreError::Corrupt)?;
+                Ok(Some(CellId::from_bytes(arr)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Record that an exact plaintext (by its local seed-keyed `tag`) maps to `cell_id`, so a future
+    /// identical save short-circuits without re-embedding. Local-only; never synced or exported.
+    pub fn dedup_record(&self, tag: &[u8; 32], cell_id: &CellId) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO dedup_tags (tag, cell_id) VALUES (?1, ?2)",
+            params![tag.as_slice(), cell_id.as_bytes().as_slice()],
+        )?;
         Ok(())
     }
 

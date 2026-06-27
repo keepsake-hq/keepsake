@@ -259,12 +259,21 @@ impl<E: Embedder> MemoryVault<E> {
         created_at: i64,
         source: Option<&str>,
     ) -> Result<(CellId, bool), StoreError> {
+        // Exact-duplicate fast path: a seed-keyed tag of the plaintext (HMAC under a kek-derived key,
+        // so it's local-only and not a global fingerprint — see `Kek::content_tag`). If we've stored
+        // this exact text before, skip the embedding entirely.
+        let tag = kek.content_tag(text.as_bytes());
+        if let Some(existing) = self.store.dedup_lookup(&tag)? {
+            return Ok((existing, false));
+        }
         let vector = self
             .embedder
             .embed(text)
             .map_err(|e| StoreError::Embed(e.to_string()))?;
         if let Some((existing, score)) = self.index.search(&vector, 1).into_iter().next() {
             if score >= threshold {
+                // Near-duplicate by meaning: record the exact tag too, so a re-send short-circuits.
+                self.store.dedup_record(&tag, &existing)?;
                 return Ok((existing, false));
             }
         }
@@ -272,6 +281,7 @@ impl<E: Embedder> MemoryVault<E> {
             .store
             .remember_with_source(kek, text.as_bytes(), created_at, source)?;
         self.index.add(id.clone(), &vector);
+        self.store.dedup_record(&tag, &id)?;
         Ok((id, true))
     }
 
@@ -938,6 +948,49 @@ mod tests {
         assert!(
             vault.get_cell(&kek, &cell).unwrap().is_none(),
             "forgotten cell → no text"
+        );
+    }
+
+    #[test]
+    fn exact_duplicate_is_caught_by_the_keyed_tag_and_storeable_again_after_forget() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        // Threshold > 1.0 disables the cosine near-dup path, isolating the keyed-tag exact-dup.
+        let (id1, stored1) = vault
+            .remember_deduped_with_source(&kek, "buy milk on tuesday", 2.0, 100, None)
+            .unwrap();
+        assert!(stored1, "first save stores");
+        let (id2, stored2) = vault
+            .remember_deduped_with_source(&kek, "buy milk on tuesday", 2.0, 200, None)
+            .unwrap();
+        assert!(!stored2, "an exact re-save is a no-op via the keyed tag");
+        assert_eq!(id1, id2, "and maps back to the same cell");
+
+        // Erasure-honest: after forgetting it, the same text stores fresh (the tag was cleaned).
+        vault.forget(&id1).unwrap();
+        let (_id3, stored3) = vault
+            .remember_deduped_with_source(&kek, "buy milk on tuesday", 2.0, 300, None)
+            .unwrap();
+        assert!(stored3, "after forget, the same text is stored anew");
+    }
+
+    #[test]
+    fn exported_passport_never_carries_local_dedup_tags() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        let secret = "my PIN is 1234";
+        vault
+            .remember_deduped_with_source(&kek, secret, 2.0, 100, None)
+            .unwrap();
+        let tag = kek.content_tag(secret.as_bytes());
+        // The tag exists locally...
+        assert!(vault.store().dedup_lookup(&tag).unwrap().is_some());
+        // ...but must NEVER appear in an exported/synced passport (zero-knowledge: keyed-or-it-leaks).
+        let passport = vault.export_passport().unwrap();
+        let json = serde_json::to_string(&passport).unwrap();
+        assert!(
+            !json.contains(&hex::encode(tag)),
+            "the local dedup tag must not appear in an exported passport"
         );
     }
 

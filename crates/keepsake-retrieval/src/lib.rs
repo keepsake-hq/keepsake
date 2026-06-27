@@ -74,6 +74,25 @@ impl std::fmt::Display for EmbedError {
 
 impl std::error::Error for EmbedError {}
 
+/// Conservative byte budget for a single embedding input. Every BPE token is at least one byte, so
+/// `tokens <= bytes`; keeping bytes under this stays safely below Nomic's ~8192-token context for
+/// ANY script (incl. CJK / Hebrew, where a char can cost multiple tokens) without estimating.
+pub const MAX_EMBED_BYTES: usize = 7000;
+
+/// Bound `text` to [`MAX_EMBED_BYTES`] at a UTF-8 char boundary before embedding, so dense or very
+/// long input can't silently overflow the model — the embedding stays deterministic and the full
+/// (un-clamped) text is still stored and recallable in the vault. Never splits a multi-byte char.
+pub fn clamp_for_embedding(text: &str) -> &str {
+    if text.len() <= MAX_EMBED_BYTES {
+        return text;
+    }
+    let mut end = MAX_EMBED_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 /// A local embedding model: text in, vector out. Implementations must keep all
 /// computation on-device (no network at inference time). Returns [`EmbedError`] instead of
 /// panicking when the model fails.
@@ -240,7 +259,7 @@ mod fast {
                 .lock()
                 .map_err(|_| EmbedError("embedder mutex poisoned".into()))?;
             model
-                .embed(vec![text], None)
+                .embed(vec![crate::clamp_for_embedding(text)], None)
                 .map_err(|e| EmbedError(e.to_string()))?
                 .into_iter()
                 .next()
@@ -263,6 +282,23 @@ mod tests {
     fn test_kek() -> Kek {
         let roots = RootKeys::from_mnemonic(TEST_MNEMONIC, "").unwrap();
         Kek::from_root(&roots.encryption_root)
+    }
+
+    #[test]
+    fn clamp_for_embedding_bounds_dense_multibyte_without_splitting_chars() {
+        // Short text is returned unchanged.
+        assert_eq!(clamp_for_embedding("hello"), "hello");
+        // A long CJK string (3 bytes/char) clamps to <= the byte budget at a char boundary.
+        let long_cjk: String = "字".repeat(10_000); // 30_000 bytes
+        let out = clamp_for_embedding(&long_cjk);
+        assert!(out.len() <= MAX_EMBED_BYTES);
+        assert_eq!(out.len() % 3, 0, "never split a 3-byte CJK char");
+        assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+        // A long Hebrew string (2 bytes/char) clamps too, still valid UTF-8.
+        let long_heb: String = "ש".repeat(10_000);
+        let outh = clamp_for_embedding(&long_heb);
+        assert!(outh.len() <= MAX_EMBED_BYTES);
+        assert!(std::str::from_utf8(outh.as_bytes()).is_ok());
     }
 
     #[test]
