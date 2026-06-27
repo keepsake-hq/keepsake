@@ -822,6 +822,8 @@ function navTo(view) {
     s.classList.toggle("hidden", s.getAttribute("data-screen") !== view),
   );
   if (view === "suchen") setTimeout(() => $("#search-input").focus(), 30);
+  if (view === "map") buildGraph();
+  else stopGraph();
 }
 
 // ---------- wire events ----------
@@ -1553,3 +1555,461 @@ on("#update-check-btn", "click", runUpdateCheck);
     show("unlock");
   }
 })();
+
+// ===================== Memory map (visual graph view) =====================
+// A force-directed similarity map of the vault's memories. Hand-rolled on a
+// <canvas> — no external libraries (strict offline CSP). Dots = memories,
+// links = similar memories, colors = auto-detected clusters.
+const MAP = {
+  raf: 0,
+  nodes: [],
+  allEdges: [],
+  edges: [],
+  adj: [],
+  hover: -1,
+  dragNode: null,
+  dragMoved: false,
+  panning: null,
+  pointer: { x: 0, y: 0 },
+  scale: 1,
+  ox: 0,
+  oy: 0,
+  W: 0,
+  H: 0,
+  ctx: null,
+  cool: 0,
+  search: "",
+  tightness: 0.58,
+  clusterCount: 0,
+  clusterLabels: [],
+  listeners: [],
+  wired: false,
+};
+const MAP_COLORS = ["#16a34a", "#0284c7", "#d97706", "#7c3aed", "#e11d48", "#0d9488", "#ca8a04", "#db2777"];
+const MAP_STOP = new Set("the a an and or but of to in on for with my your our at is are was were be been i it this that these those as by from has have had do does did so we you they he she them his her their its not no yes if then than".split(" "));
+
+function mapColorFor(p) {
+  if (p.singleton) return document.documentElement.classList.contains("dark") ? "#64748b" : "#9aa6b2";
+  return MAP_COLORS[p.cluster % MAP_COLORS.length];
+}
+function mapIsNeighbor(i, h) {
+  return h >= 0 && MAP.adj[h] && MAP.adj[h].has(i);
+}
+
+function demoGraph() {
+  // Clear clusters so the renderer can be eyeballed in a plain browser preview.
+  const groups = [
+    ["Team standup at 9", "Finish the quarterly report", "Email the supplier back", "Office rent due on the 1st", "Renew the domain name"],
+    ["Sam's birthday is in March", "Dentist for the kids Tuesday", "Family dinner on Sunday", "Buy a gift for Sam"],
+    ["Idea: a memory you actually own", "Idea: one-click import from other apps", "Idea: a visual map of memories", "Sketch the onboarding flow"],
+    ["Run three times a week", "Drink more water", "Book a checkup"],
+  ];
+  const nodes = [];
+  const edges = [];
+  groups.forEach((g, gi) => {
+    const start = nodes.length;
+    g.forEach((t) => nodes.push({ title: t, text: t + ".", created_at: 0, source: "demo" }));
+    for (let i = start; i < nodes.length; i++)
+      for (let j = i + 1; j < nodes.length; j++)
+        edges.push({ a: i, b: j, weight: 0.6 + Math.random() * 0.3 });
+  });
+  // a couple of weak cross-links so it isn't perfectly separated
+  edges.push({ a: 10, b: 0, weight: 0.5 });
+  return { nodes, edges };
+}
+
+async function fetchGraph() {
+  if (DEMO || !invoke) return demoGraph();
+  try {
+    return await invoke("memory_graph");
+  } catch (e) {
+    console.error("memory_graph failed", e);
+    return { nodes: [], edges: [] };
+  }
+}
+
+function mapClusterize() {
+  const n = MAP.nodes;
+  MAP.adj = n.map(() => new Set());
+  const wadj = n.map(() => []);
+  for (const e of MAP.edges) {
+    MAP.adj[e.a].add(e.b);
+    MAP.adj[e.b].add(e.a);
+    wadj[e.a].push([e.b, e.weight]);
+    wadj[e.b].push([e.a, e.weight]);
+  }
+  n.forEach((p, i) => {
+    p.cluster = i;
+    p.deg = MAP.adj[i].size;
+    p.singleton = p.deg === 0;
+  });
+  for (let pass = 0; pass < 14; pass++) {
+    let changed = false;
+    for (let i = 0; i < n.length; i++) {
+      if (!wadj[i].length) continue;
+      const tally = {};
+      for (const [j, w] of wadj[i]) tally[n[j].cluster] = (tally[n[j].cluster] || 0) + w;
+      let best = n[i].cluster, bestW = -1;
+      for (const c in tally) if (tally[c] > bestW) { bestW = tally[c]; best = +c; }
+      if (best !== n[i].cluster) { n[i].cluster = best; changed = true; }
+    }
+    if (!changed) break;
+  }
+  const remap = {};
+  let k = 0;
+  for (const p of n) {
+    if (p.singleton) continue;
+    if (!(p.cluster in remap)) remap[p.cluster] = k++;
+    p.cluster = remap[p.cluster];
+  }
+  MAP.clusterCount = k;
+  // auto label each cluster from the most distinctive word in its members' titles
+  const global = {};
+  for (const p of n) for (const w of mapWords(p.title)) global[w] = (global[w] || 0) + 1;
+  const perCluster = Array.from({ length: k }, () => ({}));
+  for (const p of n) if (!p.singleton) for (const w of mapWords(p.title)) perCluster[p.cluster][w] = (perCluster[p.cluster][w] || 0) + 1;
+  MAP.clusterLabels = perCluster.map((counts) => {
+    let best = "", bestScore = 0;
+    for (const w in counts) {
+      const score = counts[w] / (global[w] || 1);
+      if (score > bestScore || (score === bestScore && counts[w] > (counts[best] || 0))) { bestScore = score; best = w; }
+    }
+    return best ? best.charAt(0).toUpperCase() + best.slice(1) : "";
+  });
+}
+function mapWords(s) {
+  return (s.toLowerCase().match(/[a-zà-ÿ0-9']+/g) || []).filter((w) => w.length > 2 && !MAP_STOP.has(w));
+}
+
+function applyTightness() {
+  // tightness slider (0..1) -> cosine threshold ~0.45..0.72; filter the edge set client-side
+  const thr = MAP.tightness;
+  MAP.edges = MAP.allEdges.filter((e) => e.weight >= thr);
+  mapClusterize();
+}
+
+function seedPositions() {
+  const n = MAP.nodes, k = Math.max(1, MAP.clusterCount);
+  const R = Math.min(MAP.W, MAP.H) * 0.3 || 200;
+  const cen = [];
+  for (let c = 0; c < k; c++) {
+    const a = (c / k) * Math.PI * 2;
+    cen.push([Math.cos(a) * R, Math.sin(a) * R]);
+  }
+  n.forEach((p, i) => {
+    const c = p.singleton ? i % k : p.cluster;
+    const [cx, cy] = cen[c] || [0, 0];
+    const a = i * 2.39996;
+    const rr = 18 + (i % 9) * 7;
+    p.x = cx + Math.cos(a) * rr;
+    p.y = cy + Math.sin(a) * rr;
+    p.vx = 0;
+    p.vy = 0;
+  });
+}
+
+function mapTick() {
+  const n = MAP.nodes, e = MAP.edges;
+  const REP = 2600, K = 0.013, REST = 64, G = 0.014, DAMP = 0.86;
+  for (let i = 0; i < n.length; i++) {
+    for (let j = i + 1; j < n.length; j++) {
+      let dx = n[i].x - n[j].x, dy = n[i].y - n[j].y;
+      let d2 = dx * dx + dy * dy;
+      if (d2 < 0.01) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 0.01; }
+      const d = Math.sqrt(d2), f = REP / d2;
+      const fx = (dx / d) * f, fy = (dy / d) * f;
+      n[i].vx += fx; n[i].vy += fy; n[j].vx -= fx; n[j].vy -= fy;
+    }
+  }
+  for (const ed of e) {
+    const a = n[ed.a], b = n[ed.b];
+    let dx = b.x - a.x, dy = b.y - a.y;
+    const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+    const rest = REST / (0.4 + ed.weight);
+    const f = (d - rest) * K * (0.5 + ed.weight);
+    const fx = (dx / d) * f, fy = (dy / d) * f;
+    a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+  }
+  let energy = 0;
+  for (const p of n) {
+    p.vx += -p.x * G; p.vy += -p.y * G;
+    p.vx *= DAMP; p.vy *= DAMP;
+    if (p === MAP.dragNode) continue;
+    p.x += p.vx; p.y += p.vy;
+    energy += p.vx * p.vx + p.vy * p.vy;
+  }
+  return n.length ? energy / n.length : 0;
+}
+
+const mSX = (x) => x * MAP.scale + MAP.ox;
+const mSY = (y) => y * MAP.scale + MAP.oy;
+
+function mapDraw() {
+  const ctx = MAP.ctx;
+  if (!ctx) return;
+  const W = MAP.W, H = MAP.H;
+  ctx.clearRect(0, 0, W, H);
+  const cs = getComputedStyle(document.documentElement);
+  const inkC = (cs.getPropertyValue("--color-ink") || "#111").trim();
+  const lineC = (cs.getPropertyValue("--color-line") || "#dddddd").trim();
+  const mutedC = (cs.getPropertyValue("--color-muted") || "#888888").trim();
+  const surfaceC = (cs.getPropertyValue("--color-surface") || "#ffffff").trim();
+  const n = MAP.nodes;
+
+  // edges
+  ctx.lineWidth = 1;
+  for (const ed of MAP.edges) {
+    const a = n[ed.a], b = n[ed.b];
+    const hl = MAP.hover >= 0 && (ed.a === MAP.hover || ed.b === MAP.hover);
+    ctx.strokeStyle = hl ? mapColorFor(n[MAP.hover]) : lineC;
+    ctx.globalAlpha = MAP.hover >= 0 ? (hl ? 0.85 : 0.12) : 0.22 + ed.weight * 0.35;
+    ctx.beginPath();
+    ctx.moveTo(mSX(a.x), mSY(a.y));
+    ctx.lineTo(mSX(b.x), mSY(b.y));
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // cluster labels (soft pill at each cluster centroid)
+  if (MAP.scale > 0.45) {
+    const cx = Array.from({ length: MAP.clusterCount }, () => [0, 0, 0]);
+    for (const p of n) if (!p.singleton) { cx[p.cluster][0] += p.x; cx[p.cluster][1] += p.y; cx[p.cluster][2]++; }
+    ctx.font = "600 13px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    for (let c = 0; c < MAP.clusterCount; c++) {
+      const lab = MAP.clusterLabels[c];
+      if (!lab || !cx[c][2]) continue;
+      const x = mSX(cx[c][0] / cx[c][2]);
+      const y = mSY(cx[c][1] / cx[c][2]) - Math.min(MAP.H, MAP.W) * 0.11 * MAP.scale;
+      const w = ctx.measureText(lab).width + 18;
+      ctx.globalAlpha = MAP.hover >= 0 || MAP.search ? 0.5 : 0.92;
+      ctx.fillStyle = surfaceC;
+      mapRoundRect(ctx, x - w / 2, y - 12, w, 22, 11);
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = MAP_COLORS[c % MAP_COLORS.length];
+      ctx.stroke();
+      ctx.fillStyle = MAP_COLORS[c % MAP_COLORS.length];
+      ctx.fillText(lab, x, y + 4);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // nodes
+  ctx.textAlign = "center";
+  for (let i = 0; i < n.length; i++) {
+    const p = n[i];
+    const r = 4 + Math.min(7, p.deg * 0.9);
+    const matches = MAP.search && p.title.toLowerCase().includes(MAP.search);
+    const dim = (MAP.search && !matches) || (MAP.hover >= 0 && MAP.hover !== i && !mapIsNeighbor(i, MAP.hover));
+    ctx.globalAlpha = dim ? 0.18 : 1;
+    ctx.beginPath();
+    ctx.arc(mSX(p.x), mSY(p.y), i === MAP.hover ? r + 2 : r, 0, Math.PI * 2);
+    ctx.fillStyle = mapColorFor(p);
+    ctx.fill();
+    if (matches) { ctx.lineWidth = 2.5; ctx.strokeStyle = inkC; ctx.stroke(); }
+  }
+  ctx.globalAlpha = 1;
+
+  // hover tooltip
+  if (MAP.hover >= 0) {
+    const p = n[MAP.hover];
+    let t = p.title || "(untitled)";
+    if (t.length > 46) t = t.slice(0, 45) + "…";
+    ctx.font = "500 13px ui-sans-serif, system-ui, sans-serif";
+    const w = ctx.measureText(t).width + 20;
+    let x = mSX(p.x) + 12, y = mSY(p.y) - 14;
+    if (x + w > W) x = W - w - 6;
+    if (y < 6) y = 6;
+    ctx.globalAlpha = 0.97;
+    ctx.fillStyle = inkC;
+    mapRoundRect(ctx, x, y, w, 26, 8);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = surfaceC;
+    ctx.textAlign = "left";
+    ctx.fillText(t, x + 10, y + 17);
+  }
+}
+function mapRoundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function mapFrame() {
+  const e = mapTick();
+  mapDraw();
+  MAP.cool = e < 0.04 ? MAP.cool + 1 : 0;
+  if (MAP.cool > 28 && !MAP.dragNode && !MAP.panning) { MAP.raf = 0; mapDraw(); return; }
+  MAP.raf = requestAnimationFrame(mapFrame);
+}
+function mapKick() {
+  MAP.cool = 0;
+  if (!MAP.raf) MAP.raf = requestAnimationFrame(mapFrame);
+}
+
+function mapSizeCanvas() {
+  const cv = $("#map-canvas");
+  if (!cv) return;
+  const rect = cv.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  MAP.W = rect.width;
+  MAP.H = rect.height;
+  cv.width = Math.round(rect.width * dpr);
+  cv.height = Math.round(rect.height * dpr);
+  MAP.ctx = cv.getContext("2d");
+  MAP.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function mapHitTest(mx, my) {
+  let best = -1, bestD = 16 * 16;
+  for (let i = 0; i < MAP.nodes.length; i++) {
+    const p = MAP.nodes[i];
+    const dx = mSX(p.x) - mx, dy = mSY(p.y) - my;
+    const d = dx * dx + dy * dy;
+    const r = 4 + Math.min(7, p.deg * 0.9) + 6;
+    if (d < r * r && d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+function showMapEmpty(on) {
+  const el = $("#map-empty");
+  if (el) el.classList.toggle("hidden", !on);
+  const cv = $("#map-canvas");
+  if (cv) cv.classList.toggle("hidden", on);
+}
+
+function buildGraph() {
+  stopGraph();
+  const cv = $("#map-canvas");
+  if (!cv) return;
+  wireMapControls();
+  fetchGraph().then((g) => {
+    if ($(".view[data-screen='map']").classList.contains("hidden")) return; // navigated away
+    MAP.nodes = (g.nodes || []).map((nd) => ({ ...nd, x: 0, y: 0, vx: 0, vy: 0, deg: 0, cluster: 0, singleton: true }));
+    MAP.allEdges = (g.edges || []).slice();
+    const cnt = $("#map-count");
+    if (cnt) cnt.textContent = MAP.nodes.length + (MAP.nodes.length === 1 ? " memory" : " memories");
+    if (MAP.nodes.length < 2) { showMapEmpty(true); return; }
+    showMapEmpty(false);
+    mapSizeCanvas();
+    MAP.scale = 1;
+    MAP.ox = MAP.W / 2;
+    MAP.oy = MAP.H / 2;
+    applyTightness();
+    seedPositions();
+    mapKick();
+  });
+}
+
+function stopGraph() {
+  if (MAP.raf) cancelAnimationFrame(MAP.raf);
+  MAP.raf = 0;
+  MAP.hover = -1;
+  MAP.dragNode = null;
+  MAP.panning = null;
+}
+
+function mapOpenDetail(i) {
+  const p = MAP.nodes[i];
+  if (!p) return;
+  const d = $("#map-detail");
+  $("#map-detail-text").textContent = p.text || p.title || "";
+  const when = p.created_at ? new Date(p.created_at * 1000).toLocaleDateString() : "";
+  const src = p.source && p.source !== "desktop" ? " · " + p.source : "";
+  $("#map-detail-meta").textContent = (when ? "Saved " + when : "") + src;
+  d.dataset.id = p.id || "";
+  d.classList.remove("hidden");
+  d.classList.add("flex");
+}
+function mapCloseDetail() {
+  const d = $("#map-detail");
+  if (d) { d.classList.add("hidden"); d.classList.remove("flex"); }
+}
+
+function wireMapControls() {
+  if (MAP.wired) return;
+  MAP.wired = true;
+  const cv = $("#map-canvas");
+  if (!cv) return;
+
+  const onDown = (ev) => {
+    const r = cv.getBoundingClientRect();
+    const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+    const hit = mapHitTest(mx, my);
+    MAP.dragMoved = false;
+    if (hit >= 0) {
+      MAP.dragNode = MAP.nodes[hit];
+      MAP.dragIdx = hit;
+    } else {
+      MAP.panning = { x: ev.clientX, y: ev.clientY, ox: MAP.ox, oy: MAP.oy };
+    }
+  };
+  const onMove = (ev) => {
+    const r = cv.getBoundingClientRect();
+    const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+    if (MAP.dragNode) {
+      MAP.dragNode.x = (mx - MAP.ox) / MAP.scale;
+      MAP.dragNode.y = (my - MAP.oy) / MAP.scale;
+      MAP.dragMoved = true;
+      mapKick();
+      return;
+    }
+    if (MAP.panning) {
+      MAP.ox = MAP.panning.ox + (ev.clientX - MAP.panning.x);
+      MAP.oy = MAP.panning.oy + (ev.clientY - MAP.panning.y);
+      MAP.dragMoved = true;
+      if (!MAP.raf) mapDraw();
+      return;
+    }
+    const h = mapHitTest(mx, my);
+    if (h !== MAP.hover) { MAP.hover = h; cv.style.cursor = h >= 0 ? "pointer" : "grab"; if (!MAP.raf) mapDraw(); }
+  };
+  const onUp = () => {
+    if (MAP.dragNode && !MAP.dragMoved && MAP.dragIdx >= 0) mapOpenDetail(MAP.dragIdx);
+    MAP.dragNode = null;
+    MAP.panning = null;
+  };
+  const onWheel = (ev) => {
+    ev.preventDefault();
+    const r = cv.getBoundingClientRect();
+    const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+    const gx = (mx - MAP.ox) / MAP.scale, gy = (my - MAP.oy) / MAP.scale;
+    const factor = ev.deltaY < 0 ? 1.1 : 1 / 1.1;
+    MAP.scale = Math.max(0.2, Math.min(4, MAP.scale * factor));
+    MAP.ox = mx - gx * MAP.scale;
+    MAP.oy = my - gy * MAP.scale;
+    if (!MAP.raf) mapDraw();
+  };
+  const add = (el, ev, fn, opt) => { el.addEventListener(ev, fn, opt); MAP.listeners.push([el, ev, fn, opt]); };
+  add(cv, "mousedown", onDown);
+  add(window, "mousemove", onMove);
+  add(window, "mouseup", onUp);
+  add(cv, "wheel", onWheel, { passive: false });
+  add(window, "resize", () => { if (!$(".view[data-screen='map']").classList.contains("hidden")) { mapSizeCanvas(); mapDraw(); } });
+
+  const search = $("#map-search");
+  if (search) add(search, "input", () => { MAP.search = search.value.trim().toLowerCase(); if (!MAP.raf) mapDraw(); });
+  const tight = $("#map-tightness");
+  if (tight) add(tight, "input", () => { MAP.tightness = 0.45 + (tight.value / 100) * 0.27; applyTightness(); seedPositions(); mapKick(); });
+  const rearr = $("#map-rearrange");
+  if (rearr) add(rearr, "click", () => { seedPositions(); mapKick(); });
+  const emptyAdd = $("#map-empty-add");
+  if (emptyAdd) add(emptyAdd, "click", () => navTo("start"));
+  const close = $("#map-detail-close");
+  if (close) add(close, "click", mapCloseDetail);
+  const forget = $("#map-detail-forget");
+  if (forget) add(forget, "click", async () => {
+    const id = $("#map-detail").dataset.id;
+    if (!id) { mapCloseDetail(); return; }
+    if (!DEMO && invoke) { try { await invoke("forget", { id }); } catch (e) { console.error(e); } }
+    mapCloseDetail();
+    buildGraph();
+  });
+}

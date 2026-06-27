@@ -310,6 +310,61 @@ fn import_commit(
     })
 }
 
+#[derive(serde::Serialize)]
+struct GraphNodeDto {
+    id: String,
+    title: String,
+    text: String,
+    created_at: i64,
+    source: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct GraphEdgeDto {
+    a: usize,
+    b: usize,
+    weight: f32,
+}
+
+#[derive(serde::Serialize)]
+struct GraphDto {
+    nodes: Vec<GraphNodeDto>,
+    edges: Vec<GraphEdgeDto>,
+}
+
+/// The similarity map of the unlocked vault's memories (nodes + weighted edges) for the visual
+/// "Map" view. Computed locally from the on-device embeddings — no model, nothing leaves the device.
+#[tauri::command]
+fn memory_graph(state: State<AppState>) -> Result<GraphDto, String> {
+    with_vault(&state, |vault, kek| {
+        let g = vault
+            .memory_graph(kek, 0.58, 8, 3000)
+            .map_err(|e| format!("{e:?}"))?;
+        Ok(GraphDto {
+            nodes: g
+                .nodes
+                .into_iter()
+                .map(|n| GraphNodeDto {
+                    id: hex::encode(n.id.as_bytes()),
+                    title: n.title,
+                    text: n.text,
+                    created_at: n.created_at,
+                    source: n.source,
+                })
+                .collect(),
+            edges: g
+                .edges
+                .into_iter()
+                .map(|e| GraphEdgeDto {
+                    a: e.a,
+                    b: e.b,
+                    weight: e.weight,
+                })
+                .collect(),
+        })
+    })
+}
+
 /// How often the background task reconciles the vault with the relay.
 const SYNC_PERIOD: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -724,7 +779,8 @@ pub fn run() {
             import_preview,
             import_path,
             import_paste,
-            import_commit
+            import_commit,
+            memory_graph
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

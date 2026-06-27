@@ -172,6 +172,10 @@
             <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
             Search
           </button>
+          <button data-view="map" class="nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted hover:bg-canvas transition">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="8" r="2"/><circle cx="12" cy="17" r="2"/><path d="M7 7l3.5 8.5M17 9l-3.5 6.5"/></svg>
+            Map
+          </button>
           <button data-view="einstellungen" class="nav-item w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted hover:bg-canvas transition">
             <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             Settings
@@ -391,6 +395,60 @@
             <div class="pt-2 text-center">
               <button id="settings-startover" class="min-h-[44px] text-base font-medium text-muted hover:text-red-700 underline underline-offset-2">Start over with a new, empty Keepsake</button>
             </div>
+          </div>
+        </section>
+
+        <section data-screen="map" class="view hidden h-full flex flex-col">
+          <header class="px-8 pt-7 pb-3 shrink-0">
+            <h1 class="text-2xl font-bold tracking-tight text-ink">Your memory map</h1>
+            <p class="text-sm text-muted mt-1">Each dot is a memory. Memories about the same thing sit together — click a dot to read it.</p>
+          </header>
+          <div class="relative flex-1 min-h-0">
+            <canvas id="map-canvas" class="absolute inset-0 w-full h-full"></canvas>
+
+            <!-- floating controls -->
+            <div class="absolute top-4 left-8 right-8 flex flex-wrap items-center gap-2.5 pointer-events-none">
+              <div class="pointer-events-auto flex items-center gap-2 rounded-xl bg-surface border border-line px-3 py-2 shadow-sm">
+                <svg class="w-4 h-4 text-muted shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                <input id="map-search" type="text" placeholder="Find a memory…" class="bg-transparent text-sm text-ink placeholder:text-muted focus:outline-none w-40" />
+              </div>
+              <div class="pointer-events-auto flex items-center gap-2 rounded-xl bg-surface border border-line px-3 py-2 shadow-sm">
+                <span class="text-xs text-muted">Looser</span>
+                <input id="map-tightness" type="range" min="0" max="100" value="50" class="w-24 accent-brand-500 cursor-pointer" />
+                <span class="text-xs text-muted">Tighter</span>
+              </div>
+              <button id="map-rearrange" class="pointer-events-auto rounded-xl bg-surface border border-line px-3 py-2 text-xs font-medium text-muted hover:text-ink shadow-sm transition">Re-arrange</button>
+              <div id="map-count" class="pointer-events-none ml-auto rounded-xl bg-surface border border-line px-3 py-2 text-xs text-muted shadow-sm"></div>
+            </div>
+
+            <!-- empty state -->
+            <div id="map-empty" class="absolute inset-0 hidden items-center justify-center p-8">
+              <div class="max-w-sm text-center">
+                <div class="w-14 h-14 mx-auto rounded-2xl bg-brand-500/10 flex items-center justify-center mb-4">
+                  <svg class="w-7 h-7 text-brand-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="8" r="2"/><circle cx="12" cy="17" r="2"/><path d="M7 7l3.5 8.5M17 9l-3.5 6.5"/></svg>
+                </div>
+                <h2 class="text-lg font-semibold text-ink">Your map grows as you add memories</h2>
+                <p class="text-sm text-muted mt-2">Add a few memories and they'll start to group together into clusters you can see at a glance.</p>
+                <button id="map-empty-add" class="mt-5 inline-flex items-center gap-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold px-4 py-2.5 transition">Add a memory</button>
+              </div>
+            </div>
+
+            <!-- node detail slide-over -->
+            <aside id="map-detail" class="absolute top-0 right-0 h-full w-80 max-w-[85%] bg-surface border-l border-line hidden flex-col shadow-2xl">
+              <div class="flex items-center justify-between px-5 py-4 border-b border-line shrink-0">
+                <span class="text-sm font-semibold text-ink">Memory</span>
+                <button id="map-detail-close" class="text-muted hover:text-ink p-1 -mr-1" aria-label="Close">
+                  <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                </button>
+              </div>
+              <div class="flex-1 overflow-y-auto px-5 py-4">
+                <p id="map-detail-text" class="text-sm text-ink whitespace-pre-wrap leading-relaxed"></p>
+                <p id="map-detail-meta" class="text-xs text-muted mt-4"></p>
+              </div>
+              <div class="px-5 py-4 border-t border-line shrink-0">
+                <button id="map-detail-forget" class="text-sm font-medium text-red-600 hover:text-red-700">Forget this memory</button>
+              </div>
+            </aside>
           </div>
         </section>
       </main>

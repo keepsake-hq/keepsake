@@ -145,6 +145,33 @@ impl RecallProfile {
     }
 }
 
+/// One node of the visual memory map: a memory and the bits the UI needs to draw, label, and open it.
+#[derive(Clone, Debug)]
+pub struct GraphNode {
+    pub id: CellId,
+    /// First non-empty line, truncated — the dot's label.
+    pub title: String,
+    /// The full memory text (bounded) — shown when the dot is opened.
+    pub text: String,
+    pub created_at: i64,
+    pub source: Option<String>,
+}
+
+/// A link between two memories (indices into [`MemoryGraph::nodes`]) with their cosine similarity.
+#[derive(Clone, Copy, Debug)]
+pub struct GraphEdge {
+    pub a: usize,
+    pub b: usize,
+    pub weight: f32,
+}
+
+/// A similarity map of the live memories (nodes + weighted edges) for the visual graph view.
+#[derive(Clone, Debug)]
+pub struct MemoryGraph {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
 /// A semantic memory vault over a [`SqliteVault`] and a local [`Embedder`].
 pub struct MemoryVault<E: Embedder> {
     store: SqliteVault,
@@ -594,6 +621,92 @@ impl<E: Embedder> MemoryVault<E> {
         Ok(gone.len())
     }
 
+    /// Build a **similarity map** of the live memories for the visual graph view: every memory is a
+    /// node, and two memories are linked when their on-device embeddings are similar (cosine ≥
+    /// `threshold`). Reuses the in-RAM unit-normalized vector index (so a dot product *is* the
+    /// cosine), keeps at most `max_edges_per_node` strongest links per node (union of either
+    /// endpoint's top-k, so nothing is orphaned), drops superseded cells, and caps to the most-recent
+    /// `max_nodes`. Node titles are the first non-empty line of each memory. Local + model-free.
+    pub fn memory_graph(
+        &self,
+        kek: &Kek,
+        threshold: f32,
+        max_edges_per_node: usize,
+        max_nodes: usize,
+    ) -> Result<MemoryGraph, StoreError> {
+        let mut entries: Vec<(CellId, Vec<f32>)> = self.index.entries().to_vec();
+        entries.retain(|(id, _)| !self.superseded.contains(id.as_bytes()));
+
+        // Cap huge vaults to the most-recent max_nodes (don't silently truncate the middle).
+        if entries.len() > max_nodes {
+            let mut with_ts: Vec<(i64, (CellId, Vec<f32>))> = Vec::with_capacity(entries.len());
+            for e in entries.drain(..) {
+                let ts = self.store.created_at(&e.0)?.unwrap_or(0);
+                with_ts.push((ts, e));
+            }
+            with_ts.sort_by_key(|x| std::cmp::Reverse(x.0));
+            with_ts.truncate(max_nodes);
+            entries = with_ts.into_iter().map(|(_, e)| e).collect();
+        }
+
+        // Nodes: decrypt each cell once for a short title + the (bounded) full text.
+        let mut nodes = Vec::with_capacity(entries.len());
+        for (id, _) in &entries {
+            let full = self
+                .store
+                .recall(kek, id)?
+                .and_then(|b| String::from_utf8(b).ok())
+                .unwrap_or_default();
+            let title: String = full
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .map(|l| l.trim().chars().take(60).collect())
+                .unwrap_or_default();
+            let text: String = full.chars().take(2000).collect();
+            nodes.push(GraphNode {
+                id: id.clone(),
+                title,
+                text,
+                created_at: self.store.created_at(id)?.unwrap_or(0),
+                source: self.store.source(id)?,
+            });
+        }
+
+        // Edges: pairwise cosine (dot of unit vectors), keep those ≥ threshold.
+        let mut all: Vec<(usize, usize, f32)> = Vec::new();
+        for i in 0..entries.len() {
+            for j in (i + 1)..entries.len() {
+                let sim: f32 = entries[i].1.iter().zip(&entries[j].1).map(|(a, b)| a * b).sum();
+                if sim >= threshold {
+                    all.push((i, j, sim));
+                }
+            }
+        }
+
+        // Per-node degree cap: keep an edge if EITHER endpoint ranks it in its top-k (union).
+        let mut incident: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+        for (e, &(i, j, _)) in all.iter().enumerate() {
+            incident[i].push(e);
+            incident[j].push(e);
+        }
+        let mut keep = vec![false; all.len()];
+        for inc in &incident {
+            let mut es = inc.clone();
+            es.sort_by(|&x, &y| all[y].2.total_cmp(&all[x].2));
+            for &e in es.iter().take(max_edges_per_node) {
+                keep[e] = true;
+            }
+        }
+        let edges = all
+            .iter()
+            .enumerate()
+            .filter(|(e, _)| keep[*e])
+            .map(|(_, &(a, b, weight))| GraphEdge { a, b, weight })
+            .collect();
+
+        Ok(MemoryGraph { nodes, edges })
+    }
+
     /// Share a cell under a SAIHM contract: atomically seal the content to each grantee's
     /// public key. A TEMPORARY contract is rejected if its window is empty or exceeds 24h.
     pub fn share_with_contract(
@@ -992,6 +1105,33 @@ mod tests {
             !json.contains(&hex::encode(tag)),
             "the local dedup tag must not appear in an exported passport"
         );
+    }
+
+    #[test]
+    fn memory_graph_has_one_node_per_memory_and_filters_edges_by_threshold() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        vault.remember_at(&kek, "berlin trip on friday", 100).unwrap();
+        vault.remember_at(&kek, "berlin flight friday morning", 110).unwrap();
+        vault.remember_at(&kek, "buy milk and eggs", 120).unwrap();
+
+        let g = vault.memory_graph(&kek, 0.0, 8, 3000).unwrap();
+        assert_eq!(g.nodes.len(), 3, "one node per memory");
+        assert!(g.nodes.iter().all(|n| !n.title.is_empty()), "every node has a title");
+        for e in &g.edges {
+            assert!(e.a < g.nodes.len() && e.b < g.nodes.len() && e.a != e.b, "valid endpoints");
+            assert!(e.weight >= 0.0, "kept edges meet the threshold");
+        }
+
+        // An impossible threshold yields no edges, but the nodes stay.
+        let g2 = vault.memory_graph(&kek, 2.0, 8, 3000).unwrap();
+        assert!(g2.edges.is_empty(), "no cosine reaches 2.0");
+        assert_eq!(g2.nodes.len(), 3);
+
+        // An empty vault is an empty map (no panic, no nodes).
+        let empty = memory_vault();
+        let g3 = empty.memory_graph(&kek, 0.5, 8, 3000).unwrap();
+        assert!(g3.nodes.is_empty() && g3.edges.is_empty());
     }
 
     #[test]
