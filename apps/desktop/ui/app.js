@@ -9,6 +9,48 @@ const DEMO = !invoke;
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
+// ---------- theme (light / dark / system) ----------
+// On first run with no saved choice we follow the Mac's light/dark setting; once the user picks, we
+// remember it. The only thing this touches is a `.dark` class on <html> + a localStorage value.
+function currentThemeMode() {
+  return localStorage.getItem("keepsake-theme") || "system";
+}
+function applyTheme(mode) {
+  const prefersDark =
+    window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const dark = mode === "dark" || (mode === "system" && prefersDark);
+  document.documentElement.classList.toggle("dark", dark);
+}
+function setThemeMode(mode) {
+  localStorage.setItem("keepsake-theme", mode);
+  applyTheme(mode);
+}
+function refreshThemeButtons() {
+  const mode = currentThemeMode();
+  $$(".theme-btn").forEach((b) => {
+    const active = b.dataset.theme === mode;
+    b.classList.toggle("bg-brand-700", active);
+    b.classList.toggle("text-white", active);
+    b.classList.toggle("text-ink", !active);
+  });
+}
+// Apply immediately so the first paint matches; re-follow the OS live while in "system" mode.
+applyTheme(currentThemeMode());
+if (window.matchMedia) {
+  window
+    .matchMedia("(prefers-color-scheme: dark)")
+    .addEventListener("change", () => {
+      if (currentThemeMode() === "system") applyTheme("system");
+    });
+}
+$$(".theme-btn").forEach((b) =>
+  b.addEventListener("click", () => {
+    setThemeMode(b.dataset.theme);
+    refreshThemeButtons();
+  }),
+);
+refreshThemeButtons();
+
 // Soft tile palettes (literal strings so Tailwind's scanner keeps them).
 const TILES = [
   "bg-brand-50 text-brand-600",
@@ -91,20 +133,20 @@ function cardHtml(mem, palette) {
   const icon = TRAVEL_RE.test(text) ? ICON_PLANE : ICON_NOTE;
   const src = sourceLabel(mem.source);
   return `
-    <div data-card="${mem.id}" data-text="${escapeHtml(title)}" class="group bg-white border border-neutral-200/80 rounded-2xl px-4 py-3.5 flex items-start gap-3.5 hover:shadow-sm transition">
+    <div data-card="${mem.id}" data-text="${escapeHtml(title)}" class="group bg-surface border border-line/80 rounded-2xl px-4 py-3.5 flex items-start gap-3.5 hover:shadow-sm transition">
       <span class="w-10 h-10 rounded-xl ${palette} flex items-center justify-center shrink-0">${icon}</span>
       <div class="min-w-0 flex-1">
         <div class="flex items-start justify-between gap-3">
-          <div class="font-medium text-neutral-900 text-[15px] truncate">${escapeHtml(title)}</div>
+          <div class="font-medium text-ink text-[15px] truncate">${escapeHtml(title)}</div>
           <div class="flex items-center gap-2 shrink-0">
-            <span class="text-xs text-neutral-400 tabular-nums">${fmtTime(mem.created_at)}</span>
-            <button data-forget="${mem.id}" aria-label="Remove this memory" class="shrink-0 inline-flex items-center justify-center w-11 h-11 -mr-1 rounded-xl text-neutral-500 hover:bg-red-50 hover:text-red-600 transition">${ICON_TRASH}</button>
+            <span class="text-xs text-muted tabular-nums">${fmtTime(mem.created_at)}</span>
+            <button data-forget="${mem.id}" aria-label="Remove this memory" class="shrink-0 inline-flex items-center justify-center w-11 h-11 -mr-1 rounded-xl text-muted hover:bg-red-50 hover:text-red-600 transition">${ICON_TRASH}</button>
           </div>
         </div>
-        ${desc ? `<div class="text-sm text-neutral-500 mt-0.5 line-clamp-2">${escapeHtml(desc)}</div>` : ""}
-        <div class="mt-2 flex items-center gap-2.5 text-xs text-neutral-400">
+        ${desc ? `<div class="text-sm text-muted mt-0.5 line-clamp-2">${escapeHtml(desc)}</div>` : ""}
+        <div class="mt-2 flex items-center gap-2.5 text-xs text-muted">
           <span class="inline-flex items-center gap-1.5">${ICON_LOCK_S} End-to-end encrypted</span>
-          ${src ? `<span class="text-neutral-300">·</span><span>${escapeHtml(src)}</span>` : ""}
+          ${src ? `<span class="text-muted">·</span><span>${escapeHtml(src)}</span>` : ""}
         </div>
       </div>
     </div>`;
@@ -164,15 +206,15 @@ function renderTimeline(memories) {
         .map(
           (m) => `
         <div class="relative">
-          <span class="absolute -left-[1.6rem] top-5 w-2.5 h-2.5 rounded-full ${isToday ? "bg-brand-500" : "bg-neutral-300"} ring-4 ring-canvas"></span>
+          <span class="absolute -left-[1.6rem] top-5 w-2.5 h-2.5 rounded-full ${isToday ? "bg-brand-500" : "bg-line"} ring-4 ring-canvas"></span>
           ${cardHtml(m, TILES[hashIndex(m.id, TILES.length)])}
         </div>`,
         )
         .join("");
       return `
       <div class="${gi > 0 ? "mt-6" : ""}">
-        <div class="text-sm font-semibold ${isToday ? "text-brand-600" : "text-neutral-700"} mb-3">${g.label}</div>
-        <div class="relative border-l border-neutral-200 pl-6 space-y-3">${cards}</div>
+        <div class="text-sm font-semibold ${isToday ? "text-brand-600" : "text-ink"} mb-3">${g.label}</div>
+        <div class="relative border-l border-line pl-6 space-y-3">${cards}</div>
       </div>`;
     })
     .join("");
@@ -244,12 +286,12 @@ function doForget(id) {
   overlay.className =
     "fixed inset-0 z-50 flex items-center justify-center p-6 bg-neutral-900/40";
   overlay.innerHTML = `
-    <div class="w-full max-w-md rounded-2xl bg-white shadow-2xl p-6">
-      <h2 class="text-2xl font-bold text-neutral-900">Remove this memory?</h2>
-      <div class="mt-4 rounded-xl bg-neutral-50 border border-neutral-200 px-4 py-3 text-lg text-neutral-700">${escapeHtml(text)}</div>
-      <p class="mt-4 text-lg text-neutral-600">You'll have a few seconds to undo this.</p>
+    <div class="w-full max-w-md rounded-2xl bg-surface shadow-2xl p-6">
+      <h2 class="text-2xl font-bold text-ink">Remove this memory?</h2>
+      <div class="mt-4 rounded-xl bg-canvas border border-line px-4 py-3 text-lg text-ink">${escapeHtml(text)}</div>
+      <p class="mt-4 text-lg text-muted">You'll have a few seconds to undo this.</p>
       <div class="mt-6 flex gap-3">
-        <button data-keep class="flex-1 min-h-[52px] rounded-xl border-2 border-neutral-300 px-4 py-3 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">Keep it</button>
+        <button data-keep class="flex-1 min-h-[52px] rounded-xl border-2 border-line px-4 py-3 text-lg font-semibold text-ink hover:bg-canvas transition">Keep it</button>
         <button data-remove class="flex-1 min-h-[52px] rounded-xl bg-red-600 px-4 py-3 text-lg font-semibold text-white hover:bg-red-700 transition">Remove</button>
       </div>
     </div>`;
@@ -312,7 +354,7 @@ function showUndoToast(id, text) {
   toast.innerHTML = `
     <div class="flex items-center gap-4 px-5 py-4">
       <span class="flex-1 text-lg">Removed "<span class="font-semibold">${escapeHtml(short)}</span>"</span>
-      <button data-undo class="shrink-0 min-h-[44px] rounded-xl bg-white/15 hover:bg-white/25 px-4 py-2 text-lg font-semibold transition">Undo</button>
+      <button data-undo class="shrink-0 min-h-[44px] rounded-xl bg-surface/15 hover:bg-surface/25 px-4 py-2 text-lg font-semibold transition">Undo</button>
     </div>
     <div data-bar class="h-1.5 bg-brand-500" style="width:100%;transition:width ${FORGET_DELAY_MS}ms linear"></div>`;
   document.body.appendChild(toast);
@@ -328,16 +370,16 @@ function renderHit(h) {
   const icon = TRAVEL_RE.test(h.text) ? ICON_PLANE : ICON_NOTE;
   const oneLine = h.text.replace(/\s*\n\s*/g, " — ");
   return `
-    <li class="bg-white border border-neutral-200/80 rounded-2xl px-5 py-4 flex items-center gap-4 hover:shadow-sm transition">
+    <li class="bg-surface border border-line/80 rounded-2xl px-5 py-4 flex items-center gap-4 hover:shadow-sm transition">
       <span class="w-12 h-12 rounded-xl ${palette} flex items-center justify-center shrink-0">${icon}</span>
       <div class="min-w-0 flex-1">
-        <div class="text-lg font-semibold text-neutral-900 truncate">${escapeHtml(oneLine)}</div>
+        <div class="text-lg font-semibold text-ink truncate">${escapeHtml(oneLine)}</div>
         <div class="mt-1.5 flex items-center gap-2">
           <span class="inline-flex items-center gap-1.5 rounded-md bg-brand-50 px-2 py-0.5 text-sm font-medium text-brand-800">${ICON_LOCK_S} Only on your device</span>
-          ${sourceLabel(h.source) ? `<span class="text-sm text-neutral-500">· ${escapeHtml(sourceLabel(h.source))}</span>` : ""}
+          ${sourceLabel(h.source) ? `<span class="text-sm text-muted">· ${escapeHtml(sourceLabel(h.source))}</span>` : ""}
         </div>
       </div>
-      <svg class="w-5 h-5 text-neutral-300 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+      <svg class="w-5 h-5 text-muted shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
     </li>`;
 }
 
@@ -389,11 +431,11 @@ async function showNoResult(q) {
   empty.classList.remove("hidden");
   empty.innerHTML = `
     <div class="text-center py-8">
-      <p class="text-xl font-semibold text-neutral-800">I couldn't find anything for that.</p>
-      <p class="mt-2 text-lg text-neutral-600">Try simpler words — like just a name or a place.</p>
+      <p class="text-xl font-semibold text-ink">I couldn't find anything for that.</p>
+      <p class="mt-2 text-lg text-muted">Try simpler words — like just a name or a place.</p>
       <button id="save-as-memory" class="mt-5 inline-flex min-h-[48px] items-center rounded-xl bg-brand-700 px-5 text-lg font-semibold text-white hover:bg-brand-800 transition">Save “${escapeHtml(q)}” as a new memory</button>
     </div>
-    ${recent.length ? `<div class="mt-2"><p class="text-base font-semibold text-neutral-700 mb-3">Your most recent memories:</p><ul class="space-y-3">${recent.map(renderHit).join("")}</ul></div>` : ""}`;
+    ${recent.length ? `<div class="mt-2"><p class="text-base font-semibold text-ink mb-3">Your most recent memories:</p><ul class="space-y-3">${recent.map(renderHit).join("")}</ul></div>` : ""}`;
   const save = $("#save-as-memory");
   if (save)
     save.addEventListener("click", () => {
@@ -426,9 +468,9 @@ async function startOnboarding() {
   $("#seed-grid").innerHTML = words
     .map(
       (w, i) => `
-      <div class="flex items-center gap-3 rounded-xl border border-neutral-200 bg-neutral-50/60 px-4 py-3">
-        <span class="w-6 text-right text-base tabular-nums text-neutral-400">${i + 1}</span>
-        <span class="text-lg font-medium text-neutral-800">${escapeHtml(w)}</span>
+      <div class="flex items-center gap-3 rounded-xl border border-line bg-canvas/60 px-4 py-3">
+        <span class="w-6 text-right text-base tabular-nums text-muted">${i + 1}</span>
+        <span class="text-lg font-medium text-ink">${escapeHtml(w)}</span>
       </div>`,
     )
     .join("");
@@ -466,7 +508,7 @@ function setupVerify(words) {
   box.innerHTML = options
     .map(
       (w) =>
-        `<button class="verify-opt min-h-[52px] rounded-xl border-2 border-neutral-300 px-6 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition" data-word="${escapeHtml(w)}">${escapeHtml(w)}</button>`,
+        `<button class="verify-opt min-h-[52px] rounded-xl border-2 border-line px-6 text-lg font-semibold text-ink hover:bg-canvas transition" data-word="${escapeHtml(w)}">${escapeHtml(w)}</button>`,
     )
     .join("");
   box.querySelectorAll(".verify-opt").forEach((b) =>
@@ -578,8 +620,8 @@ function paintSyncOptions(mode) {
     b.classList.toggle("border-brand-500", active);
     b.classList.toggle("bg-brand-50", active);
     b.classList.toggle("text-brand-700", active);
-    b.classList.toggle("border-neutral-200", !active);
-    b.classList.toggle("text-neutral-600", !active);
+    b.classList.toggle("border-line", !active);
+    b.classList.toggle("text-muted", !active);
   });
   $("#sync-own-row").classList.toggle("hidden", mode !== "own");
 }
@@ -659,7 +701,7 @@ function navTo(view) {
     const active = b.getAttribute("data-view") === view;
     b.classList.toggle("bg-brand-50", active);
     b.classList.toggle("text-brand-700", active);
-    b.classList.toggle("text-neutral-600", !active);
+    b.classList.toggle("text-muted", !active);
   });
   $$(".view").forEach((s) =>
     s.classList.toggle("hidden", s.getAttribute("data-screen") !== view),
@@ -740,7 +782,7 @@ on("#reveal-seed-btn", "click", async () => {
       .split(/\s+/)
       .map(
         (w, i) =>
-          `<div class="flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2"><span class="w-5 text-right text-sm tabular-nums text-neutral-400">${i + 1}</span><span class="text-base font-medium text-neutral-800">${escapeHtml(w)}</span></div>`,
+          `<div class="flex items-center gap-2 rounded-lg border border-line bg-canvas px-3 py-2"><span class="w-5 text-right text-sm tabular-nums text-muted">${i + 1}</span><span class="text-base font-medium text-ink">${escapeHtml(w)}</span></div>`,
       )
       .join("");
   const area = $("#reveal-seed-area");
@@ -776,7 +818,7 @@ function modalShell(innerHtml) {
   const o = document.createElement("div");
   o.className =
     "fixed inset-0 z-50 flex items-center justify-center p-6 bg-neutral-900/40 overflow-y-auto";
-  o.innerHTML = `<div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl p-6 my-8">${innerHtml}</div>`;
+  o.innerHTML = `<div class="w-full max-w-lg rounded-2xl bg-surface shadow-2xl p-6 my-8">${innerHtml}</div>`;
   document.body.appendChild(o);
   return o;
 }
@@ -810,13 +852,13 @@ async function loadRecoveryStatus() {
 
 function openRecoverySetup() {
   const o = modalShell(`
-    <h2 class="text-2xl font-bold text-neutral-900">Set up your safety net</h2>
-    <p class="mt-2 text-lg text-neutral-600">We'll make 3 secret pieces. Give one to each of 3 people you trust. Any two of them together can bring your memories back — one alone can't read anything.</p>
+    <h2 class="text-2xl font-bold text-ink">Set up your safety net</h2>
+    <p class="mt-2 text-lg text-muted">We'll make 3 secret pieces. Give one to each of 3 people you trust. Any two of them together can bring your memories back — one alone can't read anything.</p>
     <div class="mt-5 space-y-3">
-      ${[1, 2, 3].map((i) => `<input class="rec-name w-full min-h-[52px] rounded-xl border-2 border-neutral-200 px-4 text-lg" placeholder="Person ${i} — e.g. My daughter Anna">`).join("")}
+      ${[1, 2, 3].map((i) => `<input class="rec-name w-full min-h-[52px] rounded-xl border-2 border-line px-4 text-lg" placeholder="Person ${i} — e.g. My daughter Anna">`).join("")}
     </div>
     <div class="mt-6 flex gap-3">
-      <button data-cancel class="flex-1 min-h-[52px] rounded-xl border-2 border-neutral-300 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">Cancel</button>
+      <button data-cancel class="flex-1 min-h-[52px] rounded-xl border-2 border-line text-lg font-semibold text-ink hover:bg-canvas transition">Cancel</button>
       <button data-next class="flex-1 min-h-[52px] rounded-xl bg-brand-700 text-white text-lg font-semibold hover:bg-brand-800 transition">Create the pieces</button>
     </div>`);
   o.querySelector("[data-cancel]").addEventListener("click", () => o.remove());
@@ -842,17 +884,17 @@ function openRecoverySetup() {
 
 function showRecoveryPieces(names, pieces) {
   const o = modalShell(`
-    <h2 class="text-2xl font-bold text-neutral-900">Give each person their piece</h2>
-    <p class="mt-2 text-lg text-neutral-600">Save each piece and give it to that person. Don't keep them together with your 24 words.</p>
+    <h2 class="text-2xl font-bold text-ink">Give each person their piece</h2>
+    <p class="mt-2 text-lg text-muted">Save each piece and give it to that person. Don't keep them together with your 24 words.</p>
     <div class="mt-5 space-y-3">
       ${names
         .map(
           (n, i) => `
-        <div class="rounded-xl border-2 border-neutral-200 p-4">
-          <div class="text-lg font-semibold text-neutral-900">${escapeHtml(n)}</div>
+        <div class="rounded-xl border-2 border-line p-4">
+          <div class="text-lg font-semibold text-ink">${escapeHtml(n)}</div>
           <div class="mt-2 flex gap-2">
-            <button class="rec-save min-h-[44px] rounded-lg border-2 border-neutral-300 px-4 text-base font-semibold hover:bg-neutral-50 transition" data-i="${i}">Save this piece</button>
-            <button class="rec-copy min-h-[44px] rounded-lg border-2 border-neutral-300 px-4 text-base font-semibold hover:bg-neutral-50 transition" data-i="${i}">Copy</button>
+            <button class="rec-save min-h-[44px] rounded-lg border-2 border-line px-4 text-base font-semibold hover:bg-canvas transition" data-i="${i}">Save this piece</button>
+            <button class="rec-copy min-h-[44px] rounded-lg border-2 border-line px-4 text-base font-semibold hover:bg-canvas transition" data-i="${i}">Copy</button>
           </div>
         </div>`,
         )
@@ -889,15 +931,15 @@ function showRecoveryPieces(names, pieces) {
 // Use: rebuild the words from collected pieces (reached from the lost-access triage).
 function openRecoveryUse() {
   const o = modalShell(`
-    <h2 class="text-2xl font-bold text-neutral-900">Get back in with your trusted people</h2>
-    <p class="mt-2 text-lg text-neutral-600">Ask two of the people you trust for the piece you gave them, and paste both here.</p>
+    <h2 class="text-2xl font-bold text-ink">Get back in with your trusted people</h2>
+    <p class="mt-2 text-lg text-muted">Ask two of the people you trust for the piece you gave them, and paste both here.</p>
     <div class="mt-5 space-y-3">
-      <textarea class="rec-piece w-full rounded-xl border-2 border-neutral-200 px-4 py-3 text-base" rows="2" placeholder="Paste the first piece here"></textarea>
-      <textarea class="rec-piece w-full rounded-xl border-2 border-neutral-200 px-4 py-3 text-base" rows="2" placeholder="Paste the second piece here"></textarea>
+      <textarea class="rec-piece w-full rounded-xl border-2 border-line px-4 py-3 text-base" rows="2" placeholder="Paste the first piece here"></textarea>
+      <textarea class="rec-piece w-full rounded-xl border-2 border-line px-4 py-3 text-base" rows="2" placeholder="Paste the second piece here"></textarea>
     </div>
     <p data-msg class="mt-3 text-base text-red-700 hidden"></p>
     <div class="mt-6 flex gap-3">
-      <button data-cancel class="flex-1 min-h-[52px] rounded-xl border-2 border-neutral-300 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">Back</button>
+      <button data-cancel class="flex-1 min-h-[52px] rounded-xl border-2 border-line text-lg font-semibold text-ink hover:bg-canvas transition">Back</button>
       <button data-go class="flex-1 min-h-[52px] rounded-xl bg-brand-700 text-white text-lg font-semibold hover:bg-brand-800 transition">Bring my memories back</button>
     </div>`);
   o.querySelector("[data-cancel]").addEventListener("click", () => o.remove());
@@ -970,12 +1012,12 @@ async function loadBackupStatus() {
 
 function backupPasswordModal({ title, intro, action, run }) {
   const o = modalShell(`
-    <h2 class="text-2xl font-bold text-neutral-900">${title}</h2>
-    <p class="mt-2 text-lg text-neutral-600">${intro}</p>
-    <input data-pw type="password" class="mt-4 w-full min-h-[52px] rounded-xl border-2 border-neutral-200 px-4 text-lg" placeholder="Your safe-copy password">
+    <h2 class="text-2xl font-bold text-ink">${title}</h2>
+    <p class="mt-2 text-lg text-muted">${intro}</p>
+    <input data-pw type="password" class="mt-4 w-full min-h-[52px] rounded-xl border-2 border-line px-4 text-lg" placeholder="Your safe-copy password">
     <p data-msg class="mt-3 text-base text-red-700 hidden"></p>
     <div class="mt-6 flex gap-3">
-      <button data-cancel class="flex-1 min-h-[52px] rounded-xl border-2 border-neutral-300 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">Cancel</button>
+      <button data-cancel class="flex-1 min-h-[52px] rounded-xl border-2 border-line text-lg font-semibold text-ink hover:bg-canvas transition">Cancel</button>
       <button data-go class="flex-1 min-h-[52px] rounded-xl bg-brand-700 text-white text-lg font-semibold hover:bg-brand-800 transition">${action}</button>
     </div>`);
   const pw = o.querySelector("[data-pw]");
@@ -1064,7 +1106,7 @@ function importResultHtml(res) {
       : "");
   return `<div class="rounded-xl border-2 border-brand-200 bg-brand-50 p-4">
       <p class="text-lg font-semibold text-brand-800">Brought in ${res.added} ${res.added === 1 ? "memory" : "memories"}.</p>
-      ${extra ? `<p class="mt-1 text-base text-neutral-700">${extra}.</p>` : ""}
+      ${extra ? `<p class="mt-1 text-base text-ink">${extra}.</p>` : ""}
     </div>`;
 }
 
@@ -1072,17 +1114,17 @@ function importResultHtml(res) {
 function reviewAndImport(label, preview, host) {
   const n = preview.total || 0;
   if (n === 0) {
-    host.innerHTML = `<p class="text-base text-neutral-600">No memories found there.</p>`;
+    host.innerHTML = `<p class="text-base text-muted">No memories found there.</p>`;
     return;
   }
   const roles = (preview.by_role || []).map(([r, c]) => `${c} ${pluralWord(r, c)}`).join(" · ");
   host.innerHTML = `
-    <div class="rounded-xl border-2 border-neutral-200 p-4">
+    <div class="rounded-xl border-2 border-line p-4">
       <div class="flex items-center justify-between">
-        <span class="text-lg font-semibold text-neutral-900">${escapeHtml(label)}</span>
+        <span class="text-lg font-semibold text-ink">${escapeHtml(label)}</span>
         <span class="text-lg font-bold text-brand-700">${n} found</span>
       </div>
-      ${roles ? `<p class="mt-1 text-base text-neutral-600">${roles}</p>` : ""}
+      ${roles ? `<p class="mt-1 text-base text-muted">${roles}</p>` : ""}
       <button data-do class="mt-3 min-h-[48px] w-full rounded-xl bg-brand-700 text-white text-base font-semibold hover:bg-brand-800 transition">Import ${n}</button>
     </div>`;
   host.querySelector("[data-do]").addEventListener("click", async (ev) => {
@@ -1105,23 +1147,23 @@ function reviewAndImport(label, preview, host) {
 
 async function openImport() {
   const o = modalShell(`
-    <h2 class="text-2xl font-bold text-neutral-900">Bring your memories in</h2>
-    <p class="mt-2 text-base text-neutral-600">Pull in the memory you built up in other AI tools — deduplicated and tidied automatically. Everything stays on this computer; nothing is uploaded.</p>
+    <h2 class="text-2xl font-bold text-ink">Bring your memories in</h2>
+    <p class="mt-2 text-base text-muted">Pull in the memory you built up in other AI tools — deduplicated and tidied automatically. Everything stays on this computer; nothing is uploaded.</p>
     <div class="mt-4">
-      <h3 class="text-sm font-semibold uppercase tracking-wide text-neutral-500">On this Mac</h3>
-      <div data-mac class="mt-2 space-y-2"><p class="text-base text-neutral-500">Looking…</p></div>
+      <h3 class="text-sm font-semibold uppercase tracking-wide text-muted">On this Mac</h3>
+      <div data-mac class="mt-2 space-y-2"><p class="text-base text-muted">Looking…</p></div>
     </div>
     <div class="mt-5">
-      <h3 class="text-sm font-semibold uppercase tracking-wide text-neutral-500">Bring in anything else</h3>
+      <h3 class="text-sm font-semibold uppercase tracking-wide text-muted">Bring in anything else</h3>
       <div class="mt-2 flex flex-wrap gap-2">
-        <button data-pick-folder class="min-h-[48px] rounded-xl border-2 border-neutral-300 px-4 text-base font-semibold text-neutral-800 hover:bg-neutral-50 transition">Choose a folder…</button>
-        <button data-pick-file class="min-h-[48px] rounded-xl border-2 border-neutral-300 px-4 text-base font-semibold text-neutral-800 hover:bg-neutral-50 transition">Choose a file…</button>
+        <button data-pick-folder class="min-h-[48px] rounded-xl border-2 border-line px-4 text-base font-semibold text-ink hover:bg-canvas transition">Choose a folder…</button>
+        <button data-pick-file class="min-h-[48px] rounded-xl border-2 border-line px-4 text-base font-semibold text-ink hover:bg-canvas transition">Choose a file…</button>
       </div>
-      <textarea data-paste rows="3" class="mt-2 w-full rounded-xl border-2 border-neutral-200 p-3 text-base" placeholder="…or paste your saved memory here — one fact per line"></textarea>
+      <textarea data-paste rows="3" class="mt-2 w-full rounded-xl border-2 border-line p-3 text-base" placeholder="…or paste your saved memory here — one fact per line"></textarea>
       <button data-paste-go class="min-h-[44px] text-base font-semibold text-brand-700 hover:text-brand-800 transition">Bring in pasted text</button>
       <div data-other class="mt-2"></div>
     </div>
-    <div class="mt-6"><button data-close class="min-h-[48px] w-full rounded-xl border-2 border-neutral-300 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">Close</button></div>`);
+    <div class="mt-6"><button data-close class="min-h-[48px] w-full rounded-xl border-2 border-line text-lg font-semibold text-ink hover:bg-canvas transition">Close</button></div>`);
   o.querySelector("[data-close]").addEventListener("click", () => o.remove());
   const other = o.querySelector("[data-other]");
 
@@ -1153,19 +1195,19 @@ async function openImport() {
     }
   }
   if (!anyFound) {
-    macWrap.innerHTML = `<p class="text-base text-neutral-600">Nothing detected automatically — bring it in with the options below.</p>`;
+    macWrap.innerHTML = `<p class="text-base text-muted">Nothing detected automatically — bring it in with the options below.</p>`;
   }
 
   // 2. Folder / file picker (native dialog → Rust reads the path).
   const pick = async (directory) => {
     const dlg = window.__TAURI__ && window.__TAURI__.dialog;
     if (!dlg || !invoke) {
-      other.innerHTML = `<p class="text-base text-neutral-500">Picking files works in the installed Keepsake app.</p>`;
+      other.innerHTML = `<p class="text-base text-muted">Picking files works in the installed Keepsake app.</p>`;
       return;
     }
     const path = await dlg.open({ directory, multiple: false });
     if (!path) return;
-    other.innerHTML = `<p class="text-base text-neutral-500">Reading…</p>`;
+    other.innerHTML = `<p class="text-base text-muted">Reading…</p>`;
     try {
       const pv = await invoke("import_path", { path });
       const label = String(path).split("/").filter(Boolean).pop() || "Selection";
@@ -1321,7 +1363,7 @@ async function runUpdateCheck() {
       showUpdateBanner(version);
     } else if (status) {
       status.textContent = "You're up to date.";
-      status.className = "mt-2 text-base font-medium text-neutral-500";
+      status.className = "mt-2 text-base font-medium text-muted";
     }
   } catch (_) {
     if (status) {
@@ -1345,7 +1387,7 @@ function showUpdateBanner(version) {
     "fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-3 bg-brand-600 text-white text-sm py-2 px-4 shadow-md";
   bar.innerHTML =
     `<span>Update <b>${escapeHtml(version)}</b> is available.</span>` +
-    `<button id="update-now" class="rounded-md bg-white text-brand-700 hover:bg-brand-50 px-3 py-1 font-medium transition">Update now</button>` +
+    `<button id="update-now" class="rounded-md bg-surface text-brand-700 hover:bg-brand-50 px-3 py-1 font-medium transition">Update now</button>` +
     `<button id="update-later" class="text-white text-xs hover:underline">Later</button>`;
   document.body.appendChild(bar);
   $("#update-now").addEventListener("click", async () => {

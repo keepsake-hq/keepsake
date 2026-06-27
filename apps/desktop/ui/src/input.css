@@ -21,9 +21,35 @@
   --color-brand-700: #15803d;
   --color-brand-800: #166534;
 
-  /* App surfaces */
-  --color-canvas: #f6f7f8;
+  /* App surfaces — semantic tokens so a dark theme is just a re-point (see `.dark` below). */
+  --color-canvas: #f6f7f8; /* page background + subtle fills */
   --color-sidebar: #ffffff;
+  --color-surface: #ffffff; /* cards / modals */
+  --color-ink: #262626; /* primary text */
+  --color-muted: #525252; /* secondary text */
+  --color-line: #e5e5e5; /* borders / dividers */
+}
+
+/* Dark theme: re-point the same surface tokens, and everything built on bg-surface / text-ink /
+   text-muted / border-line / bg-canvas follows. Toggled by adding `.dark` to <html> (see app.js). */
+.dark {
+  --color-canvas: #0f1318;
+  --color-sidebar: #161b22;
+  --color-surface: #1b2129;
+  --color-ink: #e6e9ec;
+  --color-muted: #9aa4af;
+  --color-line: #2a313a;
+}
+.dark *::-webkit-scrollbar-thumb {
+  background: #3a424d;
+  background-clip: content-box;
+}
+.dark *::-webkit-scrollbar-thumb:hover {
+  background: #4b5563;
+  background-clip: content-box;
+}
+.dark :focus-visible {
+  outline-color: var(--color-brand-400);
 }
 
 /* Indeterminate loading bar (used during first-run model download / unlock). */
