@@ -1959,6 +1959,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "keepsake-import"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "tempfile",
+]
+
+[[package]]
 name = "keepsake-mcp"
 version = "0.0.0"
 dependencies = [

@@ -2958,6 +2958,7 @@ dependencies = [
  "keepsake-crypto",
  "keepsake-daemon",
  "keepsake-desktop-core",
+ "keepsake-import",
  "keepsake-relay",
  "keepsake-retrieval",
  "keepsake-store-sqlite",
@@ -3005,6 +3006,13 @@ name = "keepsake-graph"
 version = "0.0.0"
 dependencies = [
  "keepsake-core",
+]
+
+[[package]]
+name = "keepsake-import"
+version = "0.0.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

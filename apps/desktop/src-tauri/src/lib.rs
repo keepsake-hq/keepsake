@@ -213,6 +213,78 @@ fn backup_status() -> keepsake_desktop_core::BackupMeta {
     keepsake_desktop_core::BackupMeta::load(&backup_meta_path())
 }
 
+/// A dry-run preview of what would be imported from a source: the parsed items + counts. Reads only
+/// local files — writes nothing to the vault.
+#[derive(serde::Serialize)]
+struct ImportPreview {
+    items: Vec<keepsake_import::MemoryItem>,
+    total: usize,
+    by_role: Vec<(String, usize)>,
+}
+
+/// The result of committing an import.
+#[derive(serde::Serialize)]
+struct ImportResult {
+    added: usize,
+    skipped: usize,
+    merged: usize,
+    total: usize,
+}
+
+/// Scan a source for memory and return a preview (no writes). v1 source: "claude-code".
+#[tauri::command]
+fn import_preview(source: String) -> Result<ImportPreview, String> {
+    let home = std::path::PathBuf::from(std::env::var("HOME").map_err(|_| "no HOME".to_string())?);
+    let items = match source.as_str() {
+        "claude-code" => keepsake_import::read_claude_code(&home, &[]),
+        other => return Err(format!("unknown import source: {other}")),
+    };
+    let mut roles: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for it in &items {
+        *roles.entry(it.role.clone()).or_default() += 1;
+    }
+    Ok(ImportPreview {
+        total: items.len(),
+        by_role: roles.into_iter().collect(),
+        items,
+    })
+}
+
+/// Write previewed items into the unlocked vault through the existing dedup engine, then a
+/// consolidation pass. Returns how many were added vs skipped as duplicates vs merged.
+#[tauri::command]
+fn import_commit(
+    state: State<AppState>,
+    items: Vec<keepsake_import::MemoryItem>,
+) -> Result<ImportResult, String> {
+    with_vault(&state, |vault, kek| {
+        let mut added = 0usize;
+        let mut skipped = 0usize;
+        for it in &items {
+            match vault.remember_deduped_with_source(
+                kek,
+                &it.text,
+                keepsake_vault::DEDUP_THRESHOLD,
+                it.created_at,
+                Some(&it.source),
+            ) {
+                Ok((_, true)) => added += 1,
+                Ok((_, false)) => skipped += 1,
+                Err(_) => {}
+            }
+        }
+        let merged = vault
+            .consolidate(keepsake_vault::DEDUP_THRESHOLD)
+            .unwrap_or(0);
+        Ok(ImportResult {
+            added,
+            skipped,
+            merged,
+            total: items.len(),
+        })
+    })
+}
+
 /// How often the background task reconciles the vault with the relay.
 const SYNC_PERIOD: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -622,7 +694,9 @@ pub fn run() {
             backup_enable,
             backup_now,
             backup_restore,
-            backup_status
+            backup_status,
+            import_preview,
+            import_commit
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

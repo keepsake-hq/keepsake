@@ -1050,6 +1050,85 @@ on("#backup-toggle", "click", async () => {
 });
 on("#backup-restore-btn", "click", openBackupRestore);
 
+// ---------- bring your memories in (import from other AI systems) ----------
+const DEMO_IMPORT_PREVIEW = { total: 6, by_role: [["rule", 4], ["memory", 2]], items: [] };
+
+async function openImport() {
+  const o = modalShell(`
+    <h2 class="text-2xl font-bold text-neutral-900">Bring your memories in</h2>
+    <p class="mt-2 text-lg text-neutral-600">Keepsake can pull in the memory you already built up in other AI tools — deduplicated and tidied automatically. Everything stays on this computer; nothing is uploaded.</p>
+    <div data-body class="mt-4"><p class="text-base text-neutral-500">Looking on this Mac…</p></div>
+    <div class="mt-6 flex gap-3">
+      <button data-cancel class="flex-1 min-h-[52px] rounded-xl border-2 border-neutral-300 text-lg font-semibold text-neutral-800 hover:bg-neutral-50 transition">Close</button>
+      <button data-go disabled class="flex-1 min-h-[52px] rounded-xl bg-brand-700 text-white text-lg font-semibold hover:bg-brand-800 transition disabled:opacity-40">Import</button>
+    </div>`);
+  const body = o.querySelector("[data-body]");
+  const go = o.querySelector("[data-go]");
+  o.querySelector("[data-cancel]").addEventListener("click", () => o.remove());
+
+  let preview = DEMO_IMPORT_PREVIEW;
+  if (!DEMO && invoke) {
+    try {
+      preview = await invoke("import_preview", { source: "claude-code" });
+    } catch (e) {
+      body.innerHTML = `<p class="text-base text-red-700">Couldn't scan: ${escapeHtml(String(e))}</p>`;
+      return;
+    }
+  }
+  const n = preview.total || 0;
+  if (n === 0) {
+    body.innerHTML = `<p class="text-base text-neutral-700">No Claude Code memory found on this Mac yet. (More sources — ChatGPT, Cursor, Obsidian, and a “drop any folder” option — are on the way.)</p>`;
+    return;
+  }
+  const plural = (w, c) => (c === 1 ? w : w === "memory" ? "memories" : w + "s");
+  const roles = (preview.by_role || [])
+    .map(([r, c]) => `${c} ${plural(r, c)}`)
+    .join(" · ");
+  body.innerHTML = `
+    <div class="rounded-xl border-2 border-neutral-200 p-4">
+      <div class="flex items-center justify-between">
+        <span class="text-lg font-semibold text-neutral-900">Claude Code</span>
+        <span class="text-lg font-bold text-brand-700">${n} found</span>
+      </div>
+      <p class="mt-1 text-base text-neutral-600">${roles}</p>
+    </div>
+    <p class="mt-3 text-base text-neutral-500">Nothing is written until you press Import. Duplicates are merged automatically.</p>`;
+  go.textContent = `Import ${n}`;
+  go.disabled = false;
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    go.textContent = "Importing…";
+    let res = { added: 5, skipped: 1, merged: 1, total: n };
+    if (!DEMO && invoke) {
+      try {
+        res = await invoke("import_commit", { items: preview.items });
+      } catch (e) {
+        body.innerHTML += `<p class="mt-2 text-base text-red-700">${escapeHtml(String(e))}</p>`;
+        go.disabled = false;
+        go.textContent = `Import ${n}`;
+        return;
+      }
+    }
+    const extra =
+      (res.skipped
+        ? `${res.skipped} ${res.skipped === 1 ? "was" : "were"} already in your vault`
+        : "") +
+      (res.merged
+        ? `${res.skipped ? ", and " : ""}${res.merged} near-duplicate${res.merged === 1 ? " was" : "s were"} merged`
+        : "");
+    body.innerHTML = `
+      <div class="rounded-xl border-2 border-brand-200 bg-brand-50 p-4">
+        <p class="text-lg font-semibold text-brand-800">Brought in ${res.added} ${res.added === 1 ? "memory" : "memories"}.</p>
+        ${extra ? `<p class="mt-1 text-base text-neutral-700">${extra}.</p>` : ""}
+      </div>`;
+    go.classList.add("hidden");
+    o.querySelector("[data-cancel]").textContent = "Done";
+    if (typeof refresh === "function") refresh();
+  });
+}
+
+on("#import-open", "click", openImport);
+
 // Auto-save a fresh copy after a change (no-op if backup is off or no password is held this session).
 function autoBackup() {
   if (!DEMO && invoke) invoke("backup_now").catch(() => {});

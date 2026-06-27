@@ -16,6 +16,7 @@ members = [
     "crates/keepsake-relay",
     "crates/keepsake-backup",
     "crates/keepsake-desktop-core",
+    "crates/keepsake-import",
 ]
 
 [workspace.package]

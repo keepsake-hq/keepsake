@@ -1,0 +1,13 @@
+[package]
+name = "keepsake-import"
+version = "0.0.0"
+description = "Readers that turn another system's memory (Claude Code, AGENTS.md, Obsidian, ChatGPT export, …) into normalized memory items for import into a Keepsake vault."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
