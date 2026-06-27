@@ -174,6 +174,12 @@ fn format_map(edges: &[(CellId, Triple)]) -> String {
             t.object
         ));
     }
+    // Partial-view marker: tell the agent this is structure (lossy), and exactly how to expand a node,
+    // so aggressive compression is self-documenting and never a silent loss of detail.
+    s.push_str(
+        "# Partial view — this is the map, not the memories. Fetch a node's full text by its id: \
+         saihm_recall_cell(<id>)  (CLI: keepsake get <id>).\n",
+    );
     s
 }
 
@@ -914,6 +920,10 @@ mod tests {
         assert!(
             !map.contains("secret flagship"),
             "map must NOT carry the full memory text"
+        );
+        assert!(
+            map.contains("Partial view") && map.contains("saihm_recall_cell"),
+            "the map self-documents that it is a partial view and how to expand a node: {map}"
         );
 
         // Fetch the full text by id, on demand.
