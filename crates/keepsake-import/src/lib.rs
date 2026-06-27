@@ -291,7 +291,29 @@ fn read_dir_into(dir: &Path, source: &str, out: &mut Vec<MemoryItem>, depth: usi
     }
 }
 
+/// Coding-agent rule files recognized by exact filename (several are extension-less). Importing one
+/// of these tags its items role `rule`. AGENTS.md is the open cross-tool standard.
+const RULE_FILENAMES: &[&str] = &[
+    ".cursorrules",
+    ".windsurfrules",
+    ".clinerules",
+    ".roorules",
+    ".rules",
+    "AGENTS.md",
+    "AGENTS.override.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    "CONVENTIONS.md",
+    "copilot-instructions.md",
+    "guidelines.md",
+];
+
+fn is_rule_file(name: &str) -> bool {
+    RULE_FILENAMES.contains(&name) || name.ends_with(".instructions.md") || name.ends_with(".mdc")
+}
+
 fn read_file(path: &Path, source: &str) -> Vec<MemoryItem> {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -299,8 +321,18 @@ fn read_file(path: &Path, source: &str) -> Vec<MemoryItem> {
         .to_ascii_lowercase();
     let ts = mtime(path);
     let origin = path.to_string_lossy().to_string();
+    // Coding-agent rule files (incl. extension-less .cursorrules etc.) → markdown sections, role "rule".
+    if is_rule_file(name) {
+        return std::fs::read_to_string(path)
+            .map(|t| split_markdown(&t, source, &origin, ts, "rule"))
+            .unwrap_or_default();
+    }
+    // A ChromaDB store (mem0 / LangChain / LlamaIndex local backend).
+    if name == "chroma.sqlite3" {
+        return read_chromadb(path);
+    }
     match ext.as_str() {
-        "md" | "markdown" | "mdx" => std::fs::read_to_string(path)
+        "md" | "markdown" | "mdx" | "mdc" => std::fs::read_to_string(path)
             .map(|t| split_markdown(&t, source, &origin, ts, "note"))
             .unwrap_or_default(),
         "txt" | "text" => std::fs::read_to_string(path)
@@ -310,6 +342,12 @@ fn read_file(path: &Path, source: &str) -> Vec<MemoryItem> {
             .ok()
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
             .map(|v| read_json_value(&v, source, &origin, ts))
+            .unwrap_or_default(),
+        "csv" => std::fs::read_to_string(path)
+            .map(|t| read_csv(&t, source, &origin))
+            .unwrap_or_default(),
+        "enex" => std::fs::read_to_string(path)
+            .map(|t| read_enex(&t, source, &origin, ts))
             .unwrap_or_default(),
         "zip" => read_zip(path, source),
         _ => Vec::new(),
@@ -492,6 +530,195 @@ fn read_zip(path: &Path, source: &str) -> Vec<MemoryItem> {
     out
 }
 
+/// Parse a CSV export (Microsoft Copilot activity, Notion DB, Google Keep, …): pick the most likely
+/// free-text column and a timestamp column by header name; one item per row.
+fn read_csv(text: &str, source: &str, origin: &str) -> Vec<MemoryItem> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .flexible(true)
+        .from_reader(text.as_bytes());
+    let headers: Vec<String> = match rdr.headers() {
+        Ok(h) => h.iter().map(|s| s.to_ascii_lowercase()).collect(),
+        Err(_) => return Vec::new(),
+    };
+    let text_col = ["text", "content", "note", "body", "message", "title", "summary"]
+        .iter()
+        .find_map(|k| headers.iter().position(|h| h == k))
+        .unwrap_or(0);
+    let time_col = ["created", "created_at", "timestamp", "date", "time", "updated"]
+        .iter()
+        .find_map(|k| headers.iter().position(|h| h == k));
+    let mut out = Vec::new();
+    for rec in rdr.records().flatten() {
+        let t = rec.get(text_col).unwrap_or("").trim();
+        if !meaningful(t) {
+            continue;
+        }
+        let ts = time_col
+            .and_then(|c| rec.get(c))
+            .and_then(|s| s.trim().parse::<i64>().ok())
+            .unwrap_or(0);
+        out.push(MemoryItem {
+            text: t.to_string(),
+            source: source.to_string(),
+            origin_path: origin.to_string(),
+            created_at: ts,
+            role: "note".to_string(),
+        });
+    }
+    out
+}
+
+fn xml_tag_inner(s: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = s.find(&open)? + open.len();
+    let end = s[start..].find(&close)? + start;
+    Some(s[start..end].to_string())
+}
+
+fn strip_tags(s: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                out.push(' ');
+            }
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// Parse an Evernote `.enex` export: one item per `<note>` (title + the ENML body stripped to text).
+/// Per-note timestamps aren't parsed in v1; the file mtime is used as the creation time.
+fn read_enex(xml: &str, source: &str, origin: &str, fallback_ts: i64) -> Vec<MemoryItem> {
+    let mut out = Vec::new();
+    for chunk in xml.split("<note>").skip(1) {
+        let note = chunk.split("</note>").next().unwrap_or("");
+        let title = xml_tag_inner(note, "title")
+            .map(|s| xml_unescape(&s))
+            .unwrap_or_default();
+        let content = xml_tag_inner(note, "content")
+            .unwrap_or_default()
+            .replace("<![CDATA[", "")
+            .replace("]]>", "");
+        let body = strip_tags(&xml_unescape(&content));
+        let text = format!("{title}\n{body}").trim().to_string();
+        if !meaningful(&text) {
+            continue;
+        }
+        out.push(MemoryItem {
+            text,
+            source: source.to_string(),
+            origin_path: origin.to_string(),
+            created_at: fallback_ts,
+            role: "note".to_string(),
+        });
+    }
+    out
+}
+
+/// Auto-detect coding agents' global rules/memory on this machine (Codex, OpenCode, Continue, Gemini,
+/// Aider). Project-level AGENTS.md/.cursorrules are picked up when the user points the folder picker
+/// at a repo (see [`read_path`] + [`is_rule_file`]). Tagged `import:coding-agents`.
+pub fn read_coding_agents(home: &Path) -> Vec<MemoryItem> {
+    let mut out = Vec::new();
+    let dirs = [
+        home.join(".codex"),
+        home.join(".codex").join("memories"),
+        home.join(".config").join("opencode"),
+        home.join(".continue"),
+        home.join(".continue").join("rules"),
+        home.join(".gemini"),
+        home.join(".aider"),
+    ];
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_file() {
+                out.extend(read_file(&p, "import:coding-agents"));
+            }
+        }
+    }
+    out
+}
+
+/// Auto-detect Obsidian vaults via the app's `obsidian.json` registry (macOS path), and read all
+/// notes in each as Markdown. Tagged `import:obsidian`. (Logseq is covered by the folder picker.)
+pub fn read_obsidian(home: &Path) -> Vec<MemoryItem> {
+    let cfg = home
+        .join("Library")
+        .join("Application Support")
+        .join("obsidian")
+        .join("obsidian.json");
+    let Ok(text) = std::fs::read_to_string(&cfg) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Some(vaults) = v.get("vaults").and_then(|x| x.as_object()) {
+        for vault in vaults.values() {
+            if let Some(path) = vault.get("path").and_then(|p| p.as_str()) {
+                let dir = Path::new(path);
+                if dir.is_dir() {
+                    out.extend(read_path(dir, "import:obsidian"));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Read a ChromaDB `chroma.sqlite3` store (the persistence backend behind mem0 / LangChain /
+/// LlamaIndex local setups): pull the document text out of `embedding_metadata` (key
+/// `chroma:document`), ignoring the embedding vectors entirely (Keepsake re-embeds). Read-only.
+pub fn read_chromadb(path: &Path) -> Vec<MemoryItem> {
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return Vec::new();
+    };
+    let origin = path.to_string_lossy().to_string();
+    let mut out = Vec::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT string_value FROM embedding_metadata WHERE key = 'chroma:document' AND string_value IS NOT NULL",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+            for doc in rows.flatten() {
+                if meaningful(&doc) {
+                    out.push(MemoryItem {
+                        text: doc,
+                        source: "import:chromadb".to_string(),
+                        origin_path: origin.clone(),
+                        created_at: 0,
+                        role: "note".to_string(),
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -648,5 +875,86 @@ mod tests {
 
         let items = read_path(&zip_path, "import:folder");
         assert!(items.iter().any(|i| i.text.contains("from inside a zip")), "zip recursed: {items:?}");
+    }
+
+    #[test]
+    fn read_csv_picks_text_and_time_columns() {
+        let csv = "created,activity,note\n1700000000,chat,\"Asked about, Berlin trips\"\n1700000100,chat,Second row";
+        let items = read_csv(csv, "import:folder", "/a.csv");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].text, "Asked about, Berlin trips", "quoted comma kept");
+        assert_eq!(items[0].created_at, 1_700_000_000);
+    }
+
+    #[test]
+    fn read_enex_parses_notes_to_text() {
+        let enex = "<en-export><note><title>Trip plan</title><content><![CDATA[<en-note><div>Arrive Friday</div></en-note>]]></content><created>20200101T120000Z</created></note></en-export>";
+        let items = read_enex(enex, "import:folder", "/x.enex", 99);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].text.contains("Trip plan"));
+        assert!(items[0].text.contains("Arrive Friday"), "ENML stripped to text: {:?}", items[0].text);
+        assert_eq!(items[0].created_at, 99);
+    }
+
+    #[test]
+    fn folder_scan_reads_coding_agent_rule_files_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        std::fs::write(d.join("AGENTS.md"), "# Build\nRun the tests.").unwrap();
+        std::fs::write(d.join(".cursorrules"), "Always answer in German.").unwrap();
+        let items = read_path(d, "import:folder");
+        assert!(items.iter().any(|i| i.role == "rule" && i.text.contains("Run the tests.")), "AGENTS.md");
+        assert!(items.iter().any(|i| i.role == "rule" && i.text.contains("Always answer in German.")), ".cursorrules (extension-less)");
+    }
+
+    #[test]
+    fn read_coding_agents_finds_global_codex_files() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        std::fs::create_dir_all(h.join(".codex").join("memories")).unwrap();
+        std::fs::write(h.join(".codex").join("AGENTS.md"), "# Rules\nBe concise.").unwrap();
+        std::fs::write(h.join(".codex").join("memories").join("prefs.md"), "Uses Rust.").unwrap();
+        let items = read_coding_agents(h);
+        assert!(items.iter().any(|i| i.text.contains("Be concise.")));
+        assert!(items.iter().any(|i| i.text.contains("Uses Rust.")));
+        assert!(items.iter().all(|i| i.source == "import:coding-agents"));
+    }
+
+    #[test]
+    fn read_obsidian_follows_the_vault_registry() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        let vault = h.join("MyVault");
+        std::fs::create_dir_all(&vault).unwrap();
+        std::fs::write(vault.join("idea.md"), "# Idea\nA sovereign memory vault.").unwrap();
+        let cfg = h.join("Library").join("Application Support").join("obsidian");
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(
+            cfg.join("obsidian.json"),
+            format!(r#"{{"vaults":{{"abc":{{"path":"{}","open":true}}}}}}"#, vault.to_string_lossy()),
+        )
+        .unwrap();
+        let items = read_obsidian(h);
+        assert!(items.iter().any(|i| i.text.contains("A sovereign memory vault.")), "{items:?}");
+        assert!(items.iter().all(|i| i.source == "import:obsidian"));
+    }
+
+    #[test]
+    fn read_chromadb_pulls_documents_ignores_vectors() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("chroma.sqlite3");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE embedding_metadata (id INTEGER, key TEXT, string_value TEXT);
+             INSERT INTO embedding_metadata VALUES (1,'chroma:document','User prefers dark mode');
+             INSERT INTO embedding_metadata VALUES (1,'source','some-app');
+             INSERT INTO embedding_metadata VALUES (2,'chroma:document','User lives in Berlin');",
+        )
+        .unwrap();
+        drop(conn);
+        let items = read_chromadb(&db);
+        assert_eq!(items.len(), 2, "two documents, metadata rows ignored: {items:?}");
+        assert!(items.iter().any(|i| i.text == "User prefers dark mode"));
+        assert!(items.iter().all(|i| i.source == "import:chromadb"));
     }
 }

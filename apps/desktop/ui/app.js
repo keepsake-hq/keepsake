@@ -1109,7 +1109,7 @@ async function openImport() {
     <p class="mt-2 text-base text-neutral-600">Pull in the memory you built up in other AI tools — deduplicated and tidied automatically. Everything stays on this computer; nothing is uploaded.</p>
     <div class="mt-4">
       <h3 class="text-sm font-semibold uppercase tracking-wide text-neutral-500">On this Mac</h3>
-      <div data-claude class="mt-2"><p class="text-base text-neutral-500">Looking…</p></div>
+      <div data-mac class="mt-2 space-y-2"><p class="text-base text-neutral-500">Looking…</p></div>
     </div>
     <div class="mt-5">
       <h3 class="text-sm font-semibold uppercase tracking-wide text-neutral-500">Bring in anything else</h3>
@@ -1125,20 +1125,35 @@ async function openImport() {
   o.querySelector("[data-close]").addEventListener("click", () => o.remove());
   const other = o.querySelector("[data-other]");
 
-  // 1. Auto-detect Claude Code on this Mac.
-  const claudeHost = o.querySelector("[data-claude]");
-  let cp = DEMO_IMPORT_PREVIEW;
-  if (!DEMO && invoke) {
-    try {
-      cp = await invoke("import_preview", { source: "claude-code" });
-    } catch (_) {
-      cp = { total: 0 };
+  // 1. Auto-detect the common systems on this Mac.
+  const MAC_SOURCES = [
+    { id: "claude-code", label: "Claude Code" },
+    { id: "coding-agents", label: "Cursor, Codex, Copilot & co." },
+    { id: "obsidian", label: "Obsidian" },
+  ];
+  const macWrap = o.querySelector("[data-mac]");
+  macWrap.innerHTML = "";
+  let anyFound = false;
+  for (const src of MAC_SOURCES) {
+    let pv = { total: 0 };
+    if (DEMO) {
+      pv = src.id === "claude-code" ? DEMO_IMPORT_PREVIEW : { total: 0 };
+    } else if (invoke) {
+      try {
+        pv = await invoke("import_preview", { source: src.id });
+      } catch (_) {
+        pv = { total: 0 };
+      }
+    }
+    if ((pv.total || 0) > 0) {
+      anyFound = true;
+      const host = document.createElement("div");
+      macWrap.appendChild(host);
+      reviewAndImport(src.label, pv, host);
     }
   }
-  if ((cp.total || 0) === 0) {
-    claudeHost.innerHTML = `<p class="text-base text-neutral-600">No Claude Code memory found.</p>`;
-  } else {
-    reviewAndImport("Claude Code", cp, claudeHost);
+  if (!anyFound) {
+    macWrap.innerHTML = `<p class="text-base text-neutral-600">Nothing detected automatically — bring it in with the options below.</p>`;
   }
 
   // 2. Folder / file picker (native dialog → Rust reads the path).

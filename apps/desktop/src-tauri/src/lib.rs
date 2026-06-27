@@ -250,6 +250,8 @@ fn import_preview(source: String) -> Result<ImportPreview, String> {
     let home = std::path::PathBuf::from(std::env::var("HOME").map_err(|_| "no HOME".to_string())?);
     let items = match source.as_str() {
         "claude-code" => keepsake_import::read_claude_code(&home, &[]),
+        "coding-agents" => keepsake_import::read_coding_agents(&home),
+        "obsidian" => keepsake_import::read_obsidian(&home),
         other => return Err(format!("unknown import source: {other}")),
     };
     Ok(preview_of(items))
