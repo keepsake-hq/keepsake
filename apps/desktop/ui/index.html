@@ -7,10 +7,13 @@
     <link href="./output.css" rel="stylesheet" />
   </head>
   <body class="bg-canvas text-ink font-sans antialiased">
+    <!-- Drag the whole window from this transparent macOS title strip; traffic lights overlay it. -->
+    <div data-tauri-drag-region class="titlebar-drag"></div>
+
     <!-- ===================== AUTH (locked) ===================== -->
-    <div id="auth" class="min-h-screen">
+    <div id="auth" class="h-screen scroll-pane">
       <!-- Onboarding: first run -> show a fresh 24-word seed -->
-      <main id="onboarding" class="hidden min-h-screen flex flex-col">
+      <main id="onboarding" class="hidden min-h-screen flex flex-col pt-8">
         <div class="px-8 pt-7">
           <span class="text-2xl font-bold tracking-tight text-ink">keepsake</span>
         </div>
@@ -166,9 +169,9 @@
     </div>
 
     <!-- ===================== SHELL (unlocked) ===================== -->
-    <div id="shell" class="hidden min-h-screen flex">
+    <div id="shell" class="hidden h-screen flex">
       <!-- Sidebar -->
-      <aside class="w-64 shrink-0 bg-sidebar border-r border-line/70 flex flex-col px-4 py-6">
+      <aside class="w-64 shrink-0 bg-sidebar border-r border-line/70 flex flex-col px-4 pt-10 pb-6">
         <div class="px-2 mb-8">
           <span class="text-2xl font-bold tracking-tight text-ink">keepsake</span>
         </div>
@@ -217,7 +220,7 @@
       </aside>
 
       <!-- Main -->
-      <main class="flex-1 min-w-0 overflow-y-auto h-screen">
+      <main class="flex-1 min-w-0 overflow-y-auto overscroll-contain h-screen">
         <!-- ===== Home ===== -->
         <section data-screen="start" class="view px-8 py-10 max-w-3xl mx-auto">
           <!-- Hero: lead with what to do, in plain words -->
@@ -442,7 +445,7 @@
         </section>
 
         <section data-screen="map" class="view hidden h-full flex flex-col">
-          <header class="px-8 pt-7 pb-3 shrink-0">
+          <header class="px-8 pt-10 pb-3 shrink-0">
             <h1 class="text-2xl font-bold tracking-tight text-ink">Your memory map</h1>
             <p class="text-sm text-muted mt-1">Each dot is a memory. Memories about the same thing sit together — click a dot to read it.</p>
           </header>

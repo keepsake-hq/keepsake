@@ -65,13 +65,35 @@
   animation: keepsake-load 1.25s ease-in-out infinite;
 }
 
-/* Small global niceties. */
+/* Native-app feel: the window itself never scrolls or rubber-band-bounces. Each screen
+   scrolls inside its own pane (with overscroll-contain), the way a real macOS app does —
+   no elastic page-bounce, no chrome drifting under the content. */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
 html {
   scroll-behavior: smooth;
 }
 body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+/* Every in-app scroll region keeps its scroll to itself (no chaining to the window). */
+.scroll-pane {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* The transparent macOS title strip you can drag the window by (traffic lights overlay it). */
+.titlebar-drag {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 30px;
+  z-index: 35;
 }
 /* Visible keyboard focus everywhere — an accessibility floor for the whole app. */
 :focus-visible {
