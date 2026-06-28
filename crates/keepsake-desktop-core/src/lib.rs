@@ -9,6 +9,8 @@ use keepsake_store_sqlite::StoreError;
 use keepsake_vault::{MemoryVault, RecencyParams};
 use serde::{Deserialize, Serialize};
 
+pub mod quickunlock;
+
 /// Where the vault auto-syncs. Local-first by default (`Off`); sync is opt-in.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 #[serde(tag = "mode", rename_all = "lowercase")]
@@ -67,6 +69,7 @@ pub fn archive_vault_files(dir: &std::path::Path, ts: i64) -> std::io::Result<Ve
         ("sync.json", format!("sync-old-{ts}.json")),
         ("recovery.json", format!("recovery-old-{ts}.json")),
         ("backup.json", format!("backup-old-{ts}.json")),
+        ("quickunlock.json", format!("quickunlock-old-{ts}.json")),
     ];
     let mut moved = Vec::new();
     for (from, to) in moves {

@@ -483,18 +483,19 @@ fn model_ready(app: tauri::AppHandle) -> bool {
     local_model_dir().is_some()
 }
 
-#[tauri::command]
-fn unlock(
-    app: tauri::AppHandle,
-    state: State<AppState>,
-    mnemonic: String,
+/// Core unlock shared by the 24-word `unlock` command and the PIN-based `quick_unlock`: derive
+/// keys from the mnemonic, open the vault, host the hub, start sync, and store the live Session.
+fn unlock_with_mnemonic(
+    app: &tauri::AppHandle,
+    state: &State<AppState>,
+    mnemonic: &str,
 ) -> Result<VaultStatus, String> {
     let roots = RootKeys::from_mnemonic(mnemonic.trim(), "")
         .map_err(|_| "invalid seed phrase".to_string())?;
     let kek = Kek::from_root(&roots.encryption_root);
     let store =
         SqliteVault::open(&vault_db_path(), &roots.db_key()).map_err(|e| format!("{e:?}"))?;
-    let embedder = load_embedder(&app)?;
+    let embedder = load_embedder(app)?;
     let mut vault = MemoryVault::new(store, embedder);
     vault.rebuild_index(&kek).map_err(|e| format!("{e:?}"))?;
 
@@ -551,6 +552,110 @@ fn unlock(
         backup_password: None,
     });
     Ok(status)
+}
+
+#[tauri::command]
+fn unlock(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    mnemonic: String,
+) -> Result<VaultStatus, String> {
+    unlock_with_mnemonic(&app, &state, &mnemonic)
+}
+
+/// Minimum PIN length. A short PIN is low-entropy; the Argon2id cost is what actually resists an
+/// offline guess, but we still refuse trivially short PINs and offer a passphrase in the UI.
+const QU_MIN_PIN: usize = 6;
+
+/// True if quick-unlock is set up on this device (the sidecar exists). Drives the unlock-screen
+/// PIN panel — checked separately from `vault_exists`, and reachable before the 24 words.
+#[tauri::command]
+fn quick_unlock_available() -> bool {
+    keepsake_desktop_core::quickunlock::quickunlock_enabled(&keepsake_dir())
+}
+
+/// Turn quick-unlock on: wrap the live session's 24 words under `pin` and write the 0600 sidecar.
+/// Requires an unlocked vault (we need the mnemonic to wrap).
+#[tauri::command]
+fn quick_unlock_enable(state: State<AppState>, pin: String) -> Result<(), String> {
+    let pin = zeroize::Zeroizing::new(pin);
+    if pin.chars().count() < QU_MIN_PIN {
+        return Err(format!("Use at least {QU_MIN_PIN} characters."));
+    }
+    let guard = state.0.lock().unwrap();
+    let session = guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
+    let wrapped = keepsake_crypto::quickunlock::wrap_mnemonic(&pin, &session.mnemonic);
+    let file = keepsake_desktop_core::quickunlock::QuickUnlockFile::new(wrapped);
+    file.save(&keepsake_desktop_core::quickunlock::quickunlock_path(&keepsake_dir()))
+        .map_err(|e| format!("could not turn on quick unlock: {e}"))
+}
+
+/// Open the vault with the quick-unlock PIN. Wrong PINs are counted; after the cap the sidecar is
+/// shredded and the user must use their 24 words again.
+#[tauri::command]
+fn quick_unlock(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    pin: String,
+) -> Result<VaultStatus, String> {
+    let pin = zeroize::Zeroizing::new(pin);
+    let path = keepsake_desktop_core::quickunlock::quickunlock_path(&keepsake_dir());
+    let file = keepsake_desktop_core::quickunlock::load_quickunlock(&path)
+        .ok_or_else(|| "quick unlock is not set up".to_string())?;
+    match keepsake_crypto::quickunlock::unwrap_mnemonic(&pin, &file.wrapped) {
+        Ok(mnemonic) => {
+            let _ = keepsake_desktop_core::quickunlock::quickunlock_register_success(&path);
+            unlock_with_mnemonic(&app, &state, &mnemonic)
+        }
+        Err(_) => {
+            let remaining =
+                keepsake_desktop_core::quickunlock::quickunlock_register_failure(&path)
+                    .unwrap_or(0);
+            if remaining == 0 {
+                Err("Too many wrong tries — please use your 24 words.".to_string())
+            } else if remaining == 1 {
+                Err("Wrong PIN. 1 try left before you'll need your 24 words.".to_string())
+            } else {
+                Err(format!("Wrong PIN. {remaining} tries left."))
+            }
+        }
+    }
+}
+
+/// Turn quick-unlock off: shred the sidecar so no key is stored on the device again.
+#[tauri::command]
+fn quick_unlock_disable() -> Result<(), String> {
+    keepsake_desktop_core::quickunlock::shred_quickunlock(
+        &keepsake_desktop_core::quickunlock::quickunlock_path(&keepsake_dir()),
+    )
+    .map_err(|e| format!("could not turn off quick unlock: {e}"))
+}
+
+/// Change the quick-unlock PIN: verify the old one, re-wrap under a fresh salt with the new one.
+#[tauri::command]
+fn quick_unlock_change_pin(
+    state: State<AppState>,
+    current: String,
+    fresh: String,
+) -> Result<(), String> {
+    {
+        let guard = state.0.lock().unwrap();
+        guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
+    }
+    let current = zeroize::Zeroizing::new(current);
+    let fresh = zeroize::Zeroizing::new(fresh);
+    if fresh.chars().count() < QU_MIN_PIN {
+        return Err(format!("Use at least {QU_MIN_PIN} characters."));
+    }
+    let path = keepsake_desktop_core::quickunlock::quickunlock_path(&keepsake_dir());
+    let file = keepsake_desktop_core::quickunlock::load_quickunlock(&path)
+        .ok_or_else(|| "quick unlock is not set up".to_string())?;
+    let mnemonic = keepsake_crypto::quickunlock::unwrap_mnemonic(&current, &file.wrapped)
+        .map_err(|_| "wrong current PIN".to_string())?;
+    let wrapped = keepsake_crypto::quickunlock::wrap_mnemonic(&fresh, &mnemonic);
+    let mut nf = keepsake_desktop_core::quickunlock::QuickUnlockFile::new(wrapped);
+    nf.touchid = file.touchid;
+    nf.save(&path).map_err(|e| format!("could not change your PIN: {e}"))
 }
 
 #[tauri::command]
@@ -780,7 +885,12 @@ pub fn run() {
             import_path,
             import_paste,
             import_commit,
-            memory_graph
+            memory_graph,
+            quick_unlock_available,
+            quick_unlock_enable,
+            quick_unlock,
+            quick_unlock_disable,
+            quick_unlock_change_pin
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

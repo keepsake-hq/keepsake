@@ -67,9 +67,23 @@
         <div class="w-full max-w-xl">
           <div class="text-center mb-7">
             <span class="text-3xl font-bold tracking-tight text-ink">keepsake</span>
-            <p class="mt-3 text-xl text-muted">Welcome back. Type your 24 words to open your memories.</p>
+            <p id="unlock-subtitle" class="mt-3 text-xl text-muted">Welcome back. Type your 24 words to open your memories.</p>
           </div>
-          <div class="bg-surface border border-line/80 rounded-3xl shadow-sm p-6">
+          <!-- Quick unlock (PIN) — shown only when set up on this device; reachable before the 24 words -->
+          <div id="qu-panel" class="hidden bg-surface border border-line/80 rounded-3xl shadow-sm p-6 mb-4">
+            <label class="text-lg font-semibold text-ink block mb-1">Enter your PIN</label>
+            <p class="text-base text-muted mb-3">Open Keepsake without typing all 24 words.</p>
+            <input id="qu-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Your PIN"
+              class="w-full min-h-[52px] rounded-xl border border-line bg-canvas px-4 text-lg text-ink focus:outline-none focus:border-brand-600" />
+            <button id="qu-open"
+              class="mt-4 w-full min-h-[56px] rounded-xl bg-brand-700 px-4 py-3 text-lg font-semibold text-white hover:bg-brand-800 transition">
+              Open my memories
+            </button>
+            <p id="qu-error" class="mt-3 text-base text-red-700 hidden"></p>
+            <button id="qu-use-words" class="mt-5 w-full text-center text-base font-medium text-brand-700 hover:text-brand-800 underline underline-offset-2">Use my 24 words instead</button>
+          </div>
+
+          <div id="seed-card" class="bg-surface border border-line/80 rounded-3xl shadow-sm p-6">
             <div class="flex items-center justify-between mb-3">
               <label class="text-lg font-semibold text-ink">Your 24 words</label>
               <button id="seed-paste" class="text-base font-medium text-brand-700 hover:text-brand-800 transition">Paste all</button>
@@ -327,6 +341,35 @@
                 <div id="reveal-seed-grid" class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2"></div>
                 <button id="reveal-seed-hide" class="mt-3 min-h-[44px] text-base font-medium text-muted hover:text-ink underline underline-offset-2">Hide</button>
               </div>
+            </div>
+
+            <!-- Quick unlock (PIN) -->
+            <div class="bg-surface border-2 border-line rounded-2xl p-5">
+              <h2 class="text-lg font-semibold text-ink">Quick unlock</h2>
+              <p class="mt-1 text-base text-muted">Open Keepsake with a short PIN instead of typing all 24 words every time. Your 24 words still work, and stay your master backup.</p>
+
+              <div id="qu-off">
+                <div class="mt-3 space-y-2">
+                  <input id="qu-set-pin1" type="password" inputmode="numeric" autocomplete="off" placeholder="Choose a PIN (at least 6 characters)" class="w-full min-h-[48px] rounded-xl border-2 border-line bg-canvas px-4 text-base text-ink focus:outline-none focus:border-brand-600" />
+                  <input id="qu-set-pin2" type="password" inputmode="numeric" autocomplete="off" placeholder="Repeat your PIN" class="w-full min-h-[48px] rounded-xl border-2 border-line bg-canvas px-4 text-base text-ink focus:outline-none focus:border-brand-600" />
+                </div>
+                <button id="qu-enable-btn" class="mt-3 min-h-[48px] inline-flex items-center rounded-xl bg-brand-700 px-5 text-base font-semibold text-white hover:bg-brand-800 transition">Turn on quick unlock</button>
+                <p class="mt-2 text-sm text-muted">A copy of your key is then stored on this Mac, locked by your PIN. A longer passphrase is safer than a short number.</p>
+              </div>
+
+              <div id="qu-on" class="hidden">
+                <p class="mt-2 text-base font-medium text-brand-700">✓ Quick unlock is on for this device.</p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <button id="qu-change-btn" class="min-h-[44px] rounded-xl border-2 border-line px-4 text-base font-semibold text-ink hover:bg-canvas transition">Change PIN</button>
+                  <button id="qu-disable-btn" class="min-h-[44px] rounded-xl px-4 text-base font-medium text-red-600 hover:text-red-700">Turn off</button>
+                </div>
+                <div id="qu-change-form" class="hidden mt-3 space-y-2">
+                  <input id="qu-old-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Current PIN" class="w-full min-h-[48px] rounded-xl border-2 border-line bg-canvas px-4 text-base text-ink focus:outline-none focus:border-brand-600" />
+                  <input id="qu-new-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="New PIN (at least 6 characters)" class="w-full min-h-[48px] rounded-xl border-2 border-line bg-canvas px-4 text-base text-ink focus:outline-none focus:border-brand-600" />
+                  <button id="qu-change-save" class="min-h-[44px] rounded-xl bg-brand-700 px-5 text-base font-semibold text-white hover:bg-brand-800 transition">Save new PIN</button>
+                </div>
+              </div>
+              <p id="qu-settings-msg" class="mt-2 text-base hidden"></p>
             </div>
 
             <!-- Your safety net (social recovery) -->

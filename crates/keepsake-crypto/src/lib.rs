@@ -15,6 +15,8 @@ use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+pub mod quickunlock;
+
 /// Errors surfaced by the crypto core.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CryptoError {

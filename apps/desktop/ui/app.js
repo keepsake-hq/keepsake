@@ -726,6 +726,7 @@ function enterShell() {
   loadSyncConfig();
   loadRecoveryStatus();
   loadBackupStatus();
+  loadQuickUnlockStatus();
 }
 
 // ---------- sync server setting ----------
@@ -1547,6 +1548,7 @@ on("#update-check-btn", "click", runUpdateCheck);
     }
     const exists = await invoke("vault_exists");
     if (exists) {
+      await prepareUnlockScreen();
       show("unlock");
     } else {
       await startOnboarding();
@@ -2013,3 +2015,136 @@ function wireMapControls() {
     buildGraph();
   });
 }
+
+// ===================== Quick unlock (PIN) =====================
+// Open the vault with a short PIN instead of re-typing all 24 words. The PIN unwraps an
+// on-disk, Argon2id+AES-GCM-wrapped copy of the mnemonic (keepsake-crypto::quickunlock);
+// the 24 words always remain reachable as the master backup.
+async function prepareUnlockScreen() {
+  let qu = false;
+  try { qu = !!(invoke && (await invoke("quick_unlock_available"))); } catch (_) { qu = false; }
+  const panel = $("#qu-panel"), card = $("#seed-card");
+  if (!panel || !card) return;
+  const sub = $("#unlock-subtitle");
+  if (qu) {
+    panel.classList.remove("hidden");
+    card.classList.add("hidden");
+    if (sub) sub.textContent = "Welcome back. Enter your PIN to open your memories.";
+    setTimeout(() => { const p = $("#qu-pin"); if (p) p.focus(); }, 60);
+  } else {
+    panel.classList.add("hidden");
+    card.classList.remove("hidden");
+    if (sub) sub.textContent = "Welcome back. Type your 24 words to open your memories.";
+  }
+}
+
+function revealSeedFallback() {
+  $("#qu-panel").classList.add("hidden");
+  $("#seed-card").classList.remove("hidden");
+  const sub = $("#unlock-subtitle");
+  if (sub) sub.textContent = "Welcome back. Type your 24 words to open your memories.";
+}
+
+async function doQuickUnlock() {
+  const pinEl = $("#qu-pin");
+  const pin = pinEl ? pinEl.value : "";
+  if (!pin) return;
+  const btn = $("#qu-open");
+  btn.disabled = true;
+  $("#qu-error").classList.add("hidden");
+  let ready = true;
+  try { ready = await invoke("model_ready"); } catch (_) { ready = true; }
+  showLoading(ready);
+  try {
+    await invoke("quick_unlock", { pin });
+    pinEl.value = "";
+    hideLoading();
+    enterShell();
+  } catch (e) {
+    hideLoading();
+    $("#qu-error").textContent = String(e);
+    $("#qu-error").classList.remove("hidden");
+    try {
+      if (!(await invoke("quick_unlock_available"))) {
+        // sidecar was shredded after too many wrong tries -> fall back to the 24 words
+        revealSeedFallback();
+      }
+    } catch (_) {}
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadQuickUnlockStatus() {
+  if (DEMO || !invoke) return;
+  let on = false;
+  try { on = await invoke("quick_unlock_available"); } catch (_) {}
+  const off = $("#qu-off"), onEl = $("#qu-on");
+  if (off) off.classList.toggle("hidden", on);
+  if (onEl) onEl.classList.toggle("hidden", !on);
+  const msg = $("#qu-settings-msg");
+  if (msg) msg.classList.add("hidden");
+}
+
+function quSettingsMsg(text, ok) {
+  const el = $("#qu-settings-msg");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "mt-2 text-base " + (ok ? "text-brand-700" : "text-red-700");
+  el.classList.remove("hidden");
+}
+
+(function wireQuickUnlock() {
+  const open = $("#qu-open");
+  if (open) open.addEventListener("click", doQuickUnlock);
+  const pin = $("#qu-pin");
+  if (pin) pin.addEventListener("keydown", (e) => { if (e.key === "Enter") doQuickUnlock(); });
+  const useWords = $("#qu-use-words");
+  if (useWords) useWords.addEventListener("click", () => {
+    revealSeedFallback();
+    setTimeout(() => { const b = seedBoxInputs()[0]; if (b) b.focus(); }, 30);
+  });
+
+  const enable = $("#qu-enable-btn");
+  if (enable) enable.addEventListener("click", async () => {
+    const p1 = $("#qu-set-pin1").value, p2 = $("#qu-set-pin2").value;
+    if (p1.length < 6) { quSettingsMsg("Use at least 6 characters.", false); return; }
+    if (p1 !== p2) { quSettingsMsg("The two PINs don't match.", false); return; }
+    if (DEMO || !invoke) { quSettingsMsg("Quick unlock isn't available in the demo.", false); return; }
+    enable.disabled = true;
+    try {
+      await invoke("quick_unlock_enable", { pin: p1 });
+      $("#qu-set-pin1").value = ""; $("#qu-set-pin2").value = "";
+      quSettingsMsg("Quick unlock is on. Next time, just enter your PIN.", true);
+      await loadQuickUnlockStatus();
+    } catch (e) { quSettingsMsg(String(e), false); }
+    finally { enable.disabled = false; }
+  });
+
+  const disable = $("#qu-disable-btn");
+  if (disable) disable.addEventListener("click", async () => {
+    if (DEMO || !invoke) return;
+    try {
+      await invoke("quick_unlock_disable");
+      quSettingsMsg("Quick unlock is off. You'll use your 24 words again.", true);
+      await loadQuickUnlockStatus();
+    } catch (e) { quSettingsMsg(String(e), false); }
+  });
+
+  const change = $("#qu-change-btn");
+  if (change) change.addEventListener("click", () => {
+    $("#qu-change-form").classList.toggle("hidden");
+  });
+  const changeSave = $("#qu-change-save");
+  if (changeSave) changeSave.addEventListener("click", async () => {
+    const current = $("#qu-old-pin").value, fresh = $("#qu-new-pin").value;
+    if (fresh.length < 6) { quSettingsMsg("Use at least 6 characters for the new PIN.", false); return; }
+    if (DEMO || !invoke) return;
+    try {
+      await invoke("quick_unlock_change_pin", { current, fresh });
+      $("#qu-old-pin").value = ""; $("#qu-new-pin").value = "";
+      $("#qu-change-form").classList.add("hidden");
+      quSettingsMsg("Your PIN has been changed.", true);
+    } catch (e) { quSettingsMsg(String(e), false); }
+  });
+})();

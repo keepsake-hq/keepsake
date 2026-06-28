@@ -2940,6 +2940,7 @@ name = "keepsake-crypto"
 version = "0.0.0"
 dependencies = [
  "aes-gcm",
+ "argon2",
  "bip39",
  "hkdf",
  "hmac",
@@ -2947,6 +2948,7 @@ dependencies = [
  "ml-kem",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
+ "serde",
  "sha2",
  "x25519-dalek",
  "zeroize",
