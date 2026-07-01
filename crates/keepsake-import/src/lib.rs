@@ -26,6 +26,241 @@ pub struct MemoryItem {
     pub role: String,
 }
 
+/// How a connector gets context into Keepsake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConnectorAccess {
+    /// A local source Keepsake can scan automatically with no network access.
+    LocalAuto,
+    /// A file, folder, ZIP, CSV, ENEX, JSON, or ChromaDB path the user picks.
+    LocalPicker,
+    /// Text pasted by the user, such as a saved-memory export.
+    Paste,
+    /// Agent setup instructions rather than a document import.
+    AgentSetup,
+    /// Designed but intentionally not connected until explicit OAuth work exists.
+    CloudOAuthPlanned,
+    /// Designed but intentionally not active in this build yet.
+    Planned,
+}
+
+/// One source card in the connector catalog. This is product metadata only: no tokens, no local
+/// paths, and no secrets. Connection state is derived separately from the unlocked vault.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorSpec {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub description: &'static str,
+    pub category: &'static str,
+    pub source_tag: Option<&'static str>,
+    pub access: ConnectorAccess,
+    pub network: bool,
+    pub supports_preview: bool,
+    pub primary_action: &'static str,
+    pub privacy_note: &'static str,
+}
+
+/// The product catalog for "Bring your context together". Local entries are active today. Cloud
+/// entries are visible but inert until their explicit OAuth flows are implemented.
+pub fn connector_catalog() -> Vec<ConnectorSpec> {
+    vec![
+        ConnectorSpec {
+            id: "claude-code",
+            title: "Claude Code",
+            description: "Import local CLAUDE.md rules and Claude Code memory notes.",
+            category: "AI chats",
+            source_tag: Some("import:claude-code"),
+            access: ConnectorAccess::LocalAuto,
+            network: false,
+            supports_preview: true,
+            primary_action: "Scan this Mac",
+            privacy_note: "Reads local files only. Nothing leaves this computer.",
+        },
+        ConnectorSpec {
+            id: "coding-agents",
+            title: "Coding agents",
+            description: "Bring in Codex, Cursor, Gemini, Aider, Continue, and AGENTS.md rules.",
+            category: "AI chats",
+            source_tag: Some("import:coding-agents"),
+            access: ConnectorAccess::LocalAuto,
+            network: false,
+            supports_preview: true,
+            primary_action: "Scan this Mac",
+            privacy_note: "Reads local rule and memory files only.",
+        },
+        ConnectorSpec {
+            id: "obsidian",
+            title: "Obsidian",
+            description: "Read detected Obsidian vaults as local Markdown notes.",
+            category: "Notes",
+            source_tag: Some("import:obsidian"),
+            access: ConnectorAccess::LocalAuto,
+            network: false,
+            supports_preview: true,
+            primary_action: "Scan vaults",
+            privacy_note: "Reads local vault folders only.",
+        },
+        ConnectorSpec {
+            id: "local-folder",
+            title: "Files and folders",
+            description: "Import Markdown, text, JSON, CSV, ENEX, ZIP, and ChromaDB files.",
+            category: "Files",
+            source_tag: Some("import:folder"),
+            access: ConnectorAccess::LocalPicker,
+            network: false,
+            supports_preview: true,
+            primary_action: "Pick file or folder",
+            privacy_note: "You choose the path. Keepsake only reads that local selection.",
+        },
+        ConnectorSpec {
+            id: "paste",
+            title: "Paste memories",
+            description: "Paste saved memories or a short export from another assistant.",
+            category: "AI chats",
+            source_tag: Some("import:paste"),
+            access: ConnectorAccess::Paste,
+            network: false,
+            supports_preview: true,
+            primary_action: "Paste text",
+            privacy_note: "Parsed locally before import.",
+        },
+        ConnectorSpec {
+            id: "chatgpt-export",
+            title: "ChatGPT export",
+            description: "Import conversations.json from a ChatGPT data export.",
+            category: "AI chats",
+            source_tag: Some("import:folder"),
+            access: ConnectorAccess::LocalPicker,
+            network: false,
+            supports_preview: true,
+            primary_action: "Pick export file",
+            privacy_note: "Reads your downloaded export locally.",
+        },
+        ConnectorSpec {
+            id: "chromadb",
+            title: "ChromaDB",
+            description: "Pull local documents from a chroma.sqlite3 memory store.",
+            category: "Files",
+            source_tag: Some("import:chromadb"),
+            access: ConnectorAccess::LocalPicker,
+            network: false,
+            supports_preview: true,
+            primary_action: "Pick database",
+            privacy_note: "Reads documents only and ignores existing vectors.",
+        },
+        ConnectorSpec {
+            id: "mcp-agents",
+            title: "Claude, Cursor, Codex, OpenCode",
+            description: "Connect local agents to one shared Keepsake memory hub.",
+            category: "Agents",
+            source_tag: Some("mcp"),
+            access: ConnectorAccess::AgentSetup,
+            network: false,
+            supports_preview: false,
+            primary_action: "Show setup",
+            privacy_note: "Agents receive a scoped local pass, never your 24 words.",
+        },
+        ConnectorSpec {
+            id: "web-clipper",
+            title: "Web clipper",
+            description: "Save selected text, pages, and URLs from the browser.",
+            category: "Web",
+            source_tag: Some("import:web"),
+            access: ConnectorAccess::Planned,
+            network: false,
+            supports_preview: false,
+            primary_action: "Planned",
+            privacy_note: "Will save only after a user click.",
+        },
+        ConnectorSpec {
+            id: "google-drive",
+            title: "Google Drive",
+            description: "Scoped folder or file import for Drive documents.",
+            category: "Cloud",
+            source_tag: Some("import:google-drive"),
+            access: ConnectorAccess::CloudOAuthPlanned,
+            network: true,
+            supports_preview: false,
+            primary_action: "Planned",
+            privacy_note: "Only after you connect it. No background network by default.",
+        },
+        ConnectorSpec {
+            id: "notion",
+            title: "Notion",
+            description: "Import selected pages and database rows.",
+            category: "Cloud",
+            source_tag: Some("import:notion"),
+            access: ConnectorAccess::CloudOAuthPlanned,
+            network: true,
+            supports_preview: false,
+            primary_action: "Planned",
+            privacy_note: "Only after you connect it. OAuth tokens stay local-only.",
+        },
+        ConnectorSpec {
+            id: "github",
+            title: "GitHub",
+            description: "Bring in selected issues, discussions, docs, or repos.",
+            category: "Cloud",
+            source_tag: Some("import:github"),
+            access: ConnectorAccess::CloudOAuthPlanned,
+            network: true,
+            supports_preview: false,
+            primary_action: "Planned",
+            privacy_note: "Only after you connect it. No repository is scanned automatically.",
+        },
+        ConnectorSpec {
+            id: "gmail",
+            title: "Gmail",
+            description: "Import selected mail threads as searchable memories.",
+            category: "Cloud",
+            source_tag: Some("import:gmail"),
+            access: ConnectorAccess::CloudOAuthPlanned,
+            network: true,
+            supports_preview: false,
+            primary_action: "Planned",
+            privacy_note: "Only after you connect it. No mail sync runs in the background.",
+        },
+    ]
+}
+
+pub fn connector_by_id(id: &str) -> Option<ConnectorSpec> {
+    connector_catalog().into_iter().find(|c| c.id == id)
+}
+
+/// Human label for a provenance source.
+pub fn source_label(source: Option<&str>) -> String {
+    let Some(source) = source.filter(|s| !s.trim().is_empty()) else {
+        return "Unknown source".to_string();
+    };
+    connector_catalog()
+        .into_iter()
+        .find(|c| c.source_tag == Some(source))
+        .map(|c| c.title.to_string())
+        .unwrap_or_else(|| match source {
+            "desktop" => "Keepsake".to_string(),
+            "cli" => "Keepsake CLI".to_string(),
+            "fact" => "Profile fact".to_string(),
+            s if s.starts_with("mcp:") => "Connected agent".to_string(),
+            s if s.starts_with("proxy:") => "AI proxy".to_string(),
+            s if s.starts_with("import:") => titleize_source(&s["import:".len()..]),
+            s => titleize_source(s),
+        })
+}
+
+fn titleize_source(s: &str) -> String {
+    s.split(['-', '_', ':'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Minimum non-whitespace characters for a chunk to count as a real memory (drops blank/heading-only bits).
 const MIN_CHARS: usize = 3;
 
@@ -36,12 +271,17 @@ fn meaningful(s: &str) -> bool {
 /// Strip a leading YAML frontmatter block (`---\n … \n---`) if present; otherwise return `text` as-is.
 pub fn strip_frontmatter(text: &str) -> &str {
     let t = text.strip_prefix('\u{feff}').unwrap_or(text); // tolerate a BOM
-    if let Some(rest) = t.strip_prefix("---\n").or_else(|| t.strip_prefix("---\r\n")) {
+    if let Some(rest) = t
+        .strip_prefix("---\n")
+        .or_else(|| t.strip_prefix("---\r\n"))
+    {
         // Find the closing delimiter line.
         for (idx, line) in rest.match_indices('\n') {
             let _ = line;
             let after = &rest[idx + 1..];
-            if after.starts_with("---\n") || after.starts_with("---\r\n") || after.trim_end() == "---"
+            if after.starts_with("---\n")
+                || after.starts_with("---\r\n")
+                || after.trim_end() == "---"
             {
                 // Return everything after the closing fence line.
                 let close = &rest[idx + 1..];
@@ -196,9 +436,13 @@ pub fn read_claude_code(home: &Path, project_roots: &[PathBuf]) -> Vec<MemoryIte
                     continue; // a pointer index, not a memory
                 }
                 if let Ok(text) = std::fs::read_to_string(&p) {
-                    if let Some(it) =
-                        whole_note(&text, CLAUDE_SOURCE, &p.to_string_lossy(), mtime(&p), "memory")
-                    {
+                    if let Some(it) = whole_note(
+                        &text,
+                        CLAUDE_SOURCE,
+                        &p.to_string_lossy(),
+                        mtime(&p),
+                        "memory",
+                    ) {
                         items.push(it);
                     }
                 }
@@ -218,7 +462,11 @@ pub fn read_claude_code(home: &Path, project_roots: &[PathBuf]) -> Vec<MemoryIte
 pub fn read_pasted_text(text: &str, source: &str) -> Vec<MemoryItem> {
     let lines: Vec<String> = text
         .lines()
-        .map(|l| l.trim_start_matches(['-', '*', '•', ' ', '\t']).trim().to_string())
+        .map(|l| {
+            l.trim_start_matches(['-', '*', '•', ' ', '\t'])
+                .trim()
+                .to_string()
+        })
         .filter(|l| meaningful(l))
         .collect();
     let chunks: Vec<String> = if lines.len() >= 2 {
@@ -357,7 +605,12 @@ fn read_file(path: &Path, source: &str) -> Vec<MemoryItem> {
 /// Interpret a parsed JSON value: ChatGPT `conversations.json` (array whose objects carry `mapping` +
 /// `current_node`) is walked as conversations; any other array of objects becomes one item per object
 /// (auto-picking a text + time field); a lone object becomes one item.
-pub fn read_json_value(v: &serde_json::Value, source: &str, origin: &str, fallback_ts: i64) -> Vec<MemoryItem> {
+pub fn read_json_value(
+    v: &serde_json::Value,
+    source: &str,
+    origin: &str,
+    fallback_ts: i64,
+) -> Vec<MemoryItem> {
     if let Some(arr) = v.as_array() {
         if arr
             .iter()
@@ -375,17 +628,24 @@ pub fn read_json_value(v: &serde_json::Value, source: &str, origin: &str, fallba
         .collect()
 }
 
-fn json_object_item(o: &serde_json::Value, source: &str, origin: &str, fallback_ts: i64) -> Option<MemoryItem> {
+fn json_object_item(
+    o: &serde_json::Value,
+    source: &str,
+    origin: &str,
+    fallback_ts: i64,
+) -> Option<MemoryItem> {
     let obj = o.as_object()?;
-    let text = ["text", "content", "body", "note", "message", "summary", "value"]
-        .iter()
-        .find_map(|k| obj.get(*k).and_then(|x| x.as_str()).map(|s| s.to_string()))
-        .or_else(|| {
-            obj.values()
-                .filter_map(|x| x.as_str())
-                .max_by_key(|s| s.len())
-                .map(|s| s.to_string())
-        })?;
+    let text = [
+        "text", "content", "body", "note", "message", "summary", "value",
+    ]
+    .iter()
+    .find_map(|k| obj.get(*k).and_then(|x| x.as_str()).map(|s| s.to_string()))
+    .or_else(|| {
+        obj.values()
+            .filter_map(|x| x.as_str())
+            .max_by_key(|s| s.len())
+            .map(|s| s.to_string())
+    })?;
     if !meaningful(&text) {
         return None;
     }
@@ -431,7 +691,10 @@ fn json_time(v: &serde_json::Value) -> Option<i64> {
 fn read_chatgpt(convs: &[serde_json::Value], source: &str) -> Vec<MemoryItem> {
     let mut out = Vec::new();
     for conv in convs {
-        let title = conv.get("title").and_then(|t| t.as_str()).unwrap_or("Conversation");
+        let title = conv
+            .get("title")
+            .and_then(|t| t.as_str())
+            .unwrap_or("Conversation");
         let created = conv.get("create_time").and_then(json_time).unwrap_or(0);
         let mut turns: Vec<String> = Vec::new();
         if let Some(map) = conv.get("mapping").and_then(|m| m.as_object()) {
@@ -468,13 +731,18 @@ fn read_chatgpt(convs: &[serde_json::Value], source: &str) -> Vec<MemoryItem> {
                         }
                     }
                 }
-                node = n.get("parent").and_then(|p| p.as_str()).map(|s| s.to_string());
+                node = n
+                    .get("parent")
+                    .and_then(|p| p.as_str())
+                    .map(|s| s.to_string());
             }
         }
         turns.reverse();
         if !turns.is_empty() {
             out.push(MemoryItem {
-                text: format!("{title}\n\n{}", turns.join("\n\n")).trim().to_string(),
+                text: format!("{title}\n\n{}", turns.join("\n\n"))
+                    .trim()
+                    .to_string(),
                 source: source.to_string(),
                 origin_path: String::new(),
                 created_at: created,
@@ -508,7 +776,10 @@ fn read_zip(path: &Path, source: &str) -> Vec<MemoryItem> {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if !matches!(ext.as_str(), "md" | "markdown" | "mdx" | "txt" | "text" | "json") {
+        if !matches!(
+            ext.as_str(),
+            "md" | "markdown" | "mdx" | "txt" | "text" | "json"
+        ) {
             continue;
         }
         let mut buf = String::new();
@@ -517,7 +788,9 @@ fn read_zip(path: &Path, source: &str) -> Vec<MemoryItem> {
         }
         let origin = format!("{}!{name}", path.to_string_lossy());
         match ext.as_str() {
-            "md" | "markdown" | "mdx" => out.extend(split_markdown(&buf, source, &origin, 0, "note")),
+            "md" | "markdown" | "mdx" => {
+                out.extend(split_markdown(&buf, source, &origin, 0, "note"))
+            }
             "txt" | "text" => out.extend(split_paragraphs(&buf, source, &origin, 0)),
             "json" => {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&buf) {
@@ -540,13 +813,22 @@ fn read_csv(text: &str, source: &str, origin: &str) -> Vec<MemoryItem> {
         Ok(h) => h.iter().map(|s| s.to_ascii_lowercase()).collect(),
         Err(_) => return Vec::new(),
     };
-    let text_col = ["text", "content", "note", "body", "message", "title", "summary"]
-        .iter()
-        .find_map(|k| headers.iter().position(|h| h == k))
-        .unwrap_or(0);
-    let time_col = ["created", "created_at", "timestamp", "date", "time", "updated"]
-        .iter()
-        .find_map(|k| headers.iter().position(|h| h == k));
+    let text_col = [
+        "text", "content", "note", "body", "message", "title", "summary",
+    ]
+    .iter()
+    .find_map(|k| headers.iter().position(|h| h == k))
+    .unwrap_or(0);
+    let time_col = [
+        "created",
+        "created_at",
+        "timestamp",
+        "date",
+        "time",
+        "updated",
+    ]
+    .iter()
+    .find_map(|k| headers.iter().position(|h| h == k));
     let mut out = Vec::new();
     for rec in rdr.records().flatten() {
         let t = rec.get(text_col).unwrap_or("").trim();
@@ -691,10 +973,9 @@ pub fn read_obsidian(home: &Path) -> Vec<MemoryItem> {
 /// LlamaIndex local setups): pull the document text out of `embedding_metadata` (key
 /// `chroma:document`), ignoring the embedding vectors entirely (Keepsake re-embeds). Read-only.
 pub fn read_chromadb(path: &Path) -> Vec<MemoryItem> {
-    let Ok(conn) = rusqlite::Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ) else {
+    let Ok(conn) =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
         return Vec::new();
     };
     let origin = path.to_string_lossy().to_string();
@@ -724,13 +1005,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn connector_catalog_keeps_cloud_sources_explicit_and_local_sources_importable() {
+        let catalog = connector_catalog();
+
+        let claude = catalog.iter().find(|c| c.id == "claude-code").unwrap();
+        assert_eq!(claude.source_tag, Some("import:claude-code"));
+        assert_eq!(claude.access, ConnectorAccess::LocalAuto);
+        assert!(!claude.network);
+        assert!(claude.supports_preview);
+
+        let drive = catalog.iter().find(|c| c.id == "google-drive").unwrap();
+        assert_eq!(drive.access, ConnectorAccess::CloudOAuthPlanned);
+        assert!(drive.network);
+        assert!(!drive.supports_preview);
+        assert!(
+            drive.privacy_note.contains("Only after you connect"),
+            "cloud cards must disclose that network access is explicit"
+        );
+    }
+
+    #[test]
+    fn source_labels_hide_internal_import_prefixes() {
+        assert_eq!(source_label(Some("import:claude-code")), "Claude Code");
+        assert_eq!(source_label(Some("import:coding-agents")), "Coding agents");
+        assert_eq!(source_label(Some("desktop")), "Keepsake");
+        assert_eq!(source_label(None), "Unknown source");
+    }
+
+    #[test]
     fn strip_frontmatter_removes_yaml_block_only() {
         let doc = "---\nname: x\ndescription: y\n---\nThe real body.\n";
         assert_eq!(strip_frontmatter(doc).trim(), "The real body.");
         // No frontmatter → unchanged.
         assert_eq!(strip_frontmatter("Just text"), "Just text");
         // A '---' rule mid-document is not frontmatter.
-        assert_eq!(strip_frontmatter("Top\n\n---\n\nBottom"), "Top\n\n---\n\nBottom");
+        assert_eq!(
+            strip_frontmatter("Top\n\n---\n\nBottom"),
+            "Top\n\n---\n\nBottom"
+        );
     }
 
     #[test]
@@ -741,7 +1053,10 @@ mod tests {
         assert!(items[0].text.starts_with("# Comms"));
         assert!(items[0].text.contains("Be brief."));
         assert!(items[1].text.contains("Autonomy"));
-        assert!(!items.iter().any(|i| i.text.contains("name: rules")), "frontmatter stripped");
+        assert!(
+            !items.iter().any(|i| i.text.contains("name: rules")),
+            "frontmatter stripped"
+        );
         assert_eq!(items[0].source, "import:claude-code");
         assert_eq!(items[0].role, "rule");
         assert_eq!(items[0].created_at, 100);
@@ -776,7 +1091,11 @@ mod tests {
         )
         .unwrap();
         // A per-project memory note + an index that must be skipped.
-        let memdir = h.join(".claude").join("projects").join("proj-1").join("memory");
+        let memdir = h
+            .join(".claude")
+            .join("projects")
+            .join("proj-1")
+            .join("memory");
         std::fs::create_dir_all(&memdir).unwrap();
         std::fs::write(
             memdir.join("note.md"),
@@ -788,24 +1107,36 @@ mod tests {
         let items = read_claude_code(h, &[]);
         let texts: Vec<&str> = items.iter().map(|i| i.text.as_str()).collect();
         // Two rule sections, split.
-        assert!(items.iter().any(|i| i.role == "rule" && i.text.contains("Friendly.")));
-        assert!(items.iter().any(|i| i.role == "rule" && i.text.contains("Tests must pass.")));
+        assert!(items
+            .iter()
+            .any(|i| i.role == "rule" && i.text.contains("Friendly.")));
+        assert!(items
+            .iter()
+            .any(|i| i.role == "rule" && i.text.contains("Tests must pass.")));
         // One memory note, whole, frontmatter stripped.
         assert!(items
             .iter()
             .any(|i| i.role == "memory" && i.text == "Launch date is March 14."));
         // The MEMORY.md index is NOT imported.
-        assert!(!texts.iter().any(|t| t.contains("note.md) — the date")), "index skipped");
+        assert!(
+            !texts.iter().any(|t| t.contains("note.md) — the date")),
+            "index skipped"
+        );
         assert!(items.iter().all(|i| i.source == "import:claude-code"));
     }
 
     #[test]
     fn read_pasted_text_splits_lines_and_strips_bullets() {
-        let items = read_pasted_text("- Lives in Berlin\n* Prefers German\n  • Has a dog named Max", "import:paste");
+        let items = read_pasted_text(
+            "- Lives in Berlin\n* Prefers German\n  • Has a dog named Max",
+            "import:paste",
+        );
         assert_eq!(items.len(), 3);
         assert_eq!(items[0].text, "Lives in Berlin");
         assert_eq!(items[2].text, "Has a dog named Max");
-        assert!(items.iter().all(|i| i.role == "memory" && i.source == "import:paste"));
+        assert!(items
+            .iter()
+            .all(|i| i.role == "memory" && i.source == "import:paste"));
     }
 
     #[test]
@@ -855,7 +1186,10 @@ mod tests {
         std::fs::write(d.join("ignore.png"), [0u8, 1, 2]).unwrap();
         let items = read_path(d, "import:folder");
         let texts: Vec<&str> = items.iter().map(|i| i.text.as_str()).collect();
-        assert!(items.iter().any(|i| i.text.contains("first")), "md split: {texts:?}");
+        assert!(
+            items.iter().any(|i| i.text.contains("first")),
+            "md split: {texts:?}"
+        );
         assert!(items.iter().any(|i| i.text == "para two"), "txt split");
         assert!(items.iter().any(|i| i.text == "json fact"), "json item");
         assert!(items.len() >= 5, "2 md + 2 txt + 1 json: {texts:?}");
@@ -874,7 +1208,10 @@ mod tests {
         zw.finish().unwrap();
 
         let items = read_path(&zip_path, "import:folder");
-        assert!(items.iter().any(|i| i.text.contains("from inside a zip")), "zip recursed: {items:?}");
+        assert!(
+            items.iter().any(|i| i.text.contains("from inside a zip")),
+            "zip recursed: {items:?}"
+        );
     }
 
     #[test]
@@ -882,7 +1219,10 @@ mod tests {
         let csv = "created,activity,note\n1700000000,chat,\"Asked about, Berlin trips\"\n1700000100,chat,Second row";
         let items = read_csv(csv, "import:folder", "/a.csv");
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].text, "Asked about, Berlin trips", "quoted comma kept");
+        assert_eq!(
+            items[0].text, "Asked about, Berlin trips",
+            "quoted comma kept"
+        );
         assert_eq!(items[0].created_at, 1_700_000_000);
     }
 
@@ -892,7 +1232,11 @@ mod tests {
         let items = read_enex(enex, "import:folder", "/x.enex", 99);
         assert_eq!(items.len(), 1);
         assert!(items[0].text.contains("Trip plan"));
-        assert!(items[0].text.contains("Arrive Friday"), "ENML stripped to text: {:?}", items[0].text);
+        assert!(
+            items[0].text.contains("Arrive Friday"),
+            "ENML stripped to text: {:?}",
+            items[0].text
+        );
         assert_eq!(items[0].created_at, 99);
     }
 
@@ -903,8 +1247,18 @@ mod tests {
         std::fs::write(d.join("AGENTS.md"), "# Build\nRun the tests.").unwrap();
         std::fs::write(d.join(".cursorrules"), "Always answer in German.").unwrap();
         let items = read_path(d, "import:folder");
-        assert!(items.iter().any(|i| i.role == "rule" && i.text.contains("Run the tests.")), "AGENTS.md");
-        assert!(items.iter().any(|i| i.role == "rule" && i.text.contains("Always answer in German.")), ".cursorrules (extension-less)");
+        assert!(
+            items
+                .iter()
+                .any(|i| i.role == "rule" && i.text.contains("Run the tests.")),
+            "AGENTS.md"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|i| i.role == "rule" && i.text.contains("Always answer in German.")),
+            ".cursorrules (extension-less)"
+        );
     }
 
     #[test]
@@ -913,7 +1267,11 @@ mod tests {
         let h = home.path();
         std::fs::create_dir_all(h.join(".codex").join("memories")).unwrap();
         std::fs::write(h.join(".codex").join("AGENTS.md"), "# Rules\nBe concise.").unwrap();
-        std::fs::write(h.join(".codex").join("memories").join("prefs.md"), "Uses Rust.").unwrap();
+        std::fs::write(
+            h.join(".codex").join("memories").join("prefs.md"),
+            "Uses Rust.",
+        )
+        .unwrap();
         let items = read_coding_agents(h);
         assert!(items.iter().any(|i| i.text.contains("Be concise.")));
         assert!(items.iter().any(|i| i.text.contains("Uses Rust.")));
@@ -927,15 +1285,26 @@ mod tests {
         let vault = h.join("MyVault");
         std::fs::create_dir_all(&vault).unwrap();
         std::fs::write(vault.join("idea.md"), "# Idea\nA sovereign memory vault.").unwrap();
-        let cfg = h.join("Library").join("Application Support").join("obsidian");
+        let cfg = h
+            .join("Library")
+            .join("Application Support")
+            .join("obsidian");
         std::fs::create_dir_all(&cfg).unwrap();
         std::fs::write(
             cfg.join("obsidian.json"),
-            format!(r#"{{"vaults":{{"abc":{{"path":"{}","open":true}}}}}}"#, vault.to_string_lossy()),
+            format!(
+                r#"{{"vaults":{{"abc":{{"path":"{}","open":true}}}}}}"#,
+                vault.to_string_lossy()
+            ),
         )
         .unwrap();
         let items = read_obsidian(h);
-        assert!(items.iter().any(|i| i.text.contains("A sovereign memory vault.")), "{items:?}");
+        assert!(
+            items
+                .iter()
+                .any(|i| i.text.contains("A sovereign memory vault.")),
+            "{items:?}"
+        );
         assert!(items.iter().all(|i| i.source == "import:obsidian"));
     }
 
@@ -953,7 +1322,11 @@ mod tests {
         .unwrap();
         drop(conn);
         let items = read_chromadb(&db);
-        assert_eq!(items.len(), 2, "two documents, metadata rows ignored: {items:?}");
+        assert_eq!(
+            items.len(),
+            2,
+            "two documents, metadata rows ignored: {items:?}"
+        );
         assert!(items.iter().any(|i| i.text == "User prefers dark mode"));
         assert!(items.iter().all(|i| i.source == "import:chromadb"));
     }

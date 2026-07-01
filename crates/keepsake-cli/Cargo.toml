@@ -20,6 +20,7 @@ keepsake-firewall = { path = "../keepsake-firewall" }
 keepsake-daemon = { path = "../keepsake-daemon" }
 keepsake-relay = { path = "../keepsake-relay" }
 keepsake-backup = { path = "../keepsake-backup" }
+keepsake-import = { path = "../keepsake-import" }
 sha2 = "0.10"
 clap = { version = "4", features = ["derive"] }
 bip39 = { version = "2", features = ["rand"] }

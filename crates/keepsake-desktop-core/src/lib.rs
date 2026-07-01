@@ -89,10 +89,12 @@ pub fn recovery_split(mnemonic: &str, threshold: u8, shares: u8) -> Result<Vec<S
     let entropy = bip39::Mnemonic::parse(mnemonic.trim())
         .map_err(|_| "not a valid set of 24 words".to_string())?
         .to_entropy();
-    Ok(keepsake_crypto::recovery::split(&entropy, threshold, shares)
-        .into_iter()
-        .map(|p| format!("{}-{}", p.index, hex::encode(&p.bytes)))
-        .collect())
+    Ok(
+        keepsake_crypto::recovery::split(&entropy, threshold, shares)
+            .into_iter()
+            .map(|p| format!("{}-{}", p.index, hex::encode(&p.bytes)))
+            .collect(),
+    )
 }
 
 /// Rebuild the 24 words from collected pieces (each `index-hex`). Returns the mnemonic to unlock
@@ -240,6 +242,134 @@ pub struct RecentMemory {
     pub source: Option<String>,
 }
 
+/// A connector card plus local status derived from memories already in the unlocked vault.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConnectorView {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub category: String,
+    pub access: String,
+    pub source_tag: Option<String>,
+    pub network: bool,
+    pub supports_preview: bool,
+    pub primary_action: String,
+    pub privacy_note: String,
+    pub status: String,
+    pub memory_count: usize,
+    pub last_imported_at: Option<i64>,
+}
+
+/// One document/memory row for the document browser. The text is still the decrypted local memory;
+/// no extra document index or token table is created.
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct DocumentRow {
+    pub id: String,
+    pub title: String,
+    pub preview: String,
+    pub source: Option<String>,
+    pub source_label: String,
+    pub created_at: i64,
+}
+
+pub fn connector_views(memories: &[RecentMemory]) -> Vec<ConnectorView> {
+    keepsake_import::connector_catalog()
+        .into_iter()
+        .map(|spec| {
+            let mut memory_count = 0usize;
+            let mut last_imported_at: Option<i64> = None;
+            for m in memories {
+                if source_matches(spec.source_tag, m.source.as_deref()) {
+                    memory_count += 1;
+                    last_imported_at =
+                        Some(last_imported_at.map_or(m.created_at, |ts| ts.max(m.created_at)));
+                }
+            }
+            let planned = matches!(
+                spec.access,
+                keepsake_import::ConnectorAccess::CloudOAuthPlanned
+                    | keepsake_import::ConnectorAccess::Planned
+            );
+            let status = if memory_count > 0 {
+                "connected"
+            } else if planned {
+                "planned"
+            } else {
+                "available"
+            };
+            ConnectorView {
+                id: spec.id.to_string(),
+                title: spec.title.to_string(),
+                description: spec.description.to_string(),
+                category: spec.category.to_string(),
+                access: connector_access_name(spec.access).to_string(),
+                source_tag: spec.source_tag.map(str::to_string),
+                network: spec.network,
+                supports_preview: spec.supports_preview,
+                primary_action: spec.primary_action.to_string(),
+                privacy_note: spec.privacy_note.to_string(),
+                status: status.to_string(),
+                memory_count,
+                last_imported_at,
+            }
+        })
+        .collect()
+}
+
+pub fn document_rows(memories: &[RecentMemory], source: Option<&str>) -> Vec<DocumentRow> {
+    memories
+        .iter()
+        .filter(|m| source.map_or(true, |s| m.source.as_deref() == Some(s)))
+        .map(|m| DocumentRow {
+            id: m.id.clone(),
+            title: memory_title(&m.text),
+            preview: preview_text(&m.text, 260),
+            source: m.source.clone(),
+            source_label: keepsake_import::source_label(m.source.as_deref()),
+            created_at: m.created_at,
+        })
+        .collect()
+}
+
+fn connector_access_name(access: keepsake_import::ConnectorAccess) -> &'static str {
+    match access {
+        keepsake_import::ConnectorAccess::LocalAuto => "local-auto",
+        keepsake_import::ConnectorAccess::LocalPicker => "local-picker",
+        keepsake_import::ConnectorAccess::Paste => "paste",
+        keepsake_import::ConnectorAccess::AgentSetup => "agent-setup",
+        keepsake_import::ConnectorAccess::CloudOAuthPlanned => "cloud-oauth-planned",
+        keepsake_import::ConnectorAccess::Planned => "planned",
+    }
+}
+
+pub fn source_matches(wanted: Option<&str>, actual: Option<&str>) -> bool {
+    match (wanted, actual) {
+        (Some("mcp"), Some(s)) => s == "mcp" || s.starts_with("mcp:"),
+        (Some(w), Some(a)) => w == a,
+        _ => false,
+    }
+}
+
+fn memory_title(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| preview_text(line, 70))
+        .unwrap_or_else(|| "Untitled memory".to_string())
+}
+
+fn preview_text(text: &str, limit: usize) -> String {
+    let mut out = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if out.chars().count() > limit {
+        out = out
+            .chars()
+            .take(limit.saturating_sub(1))
+            .collect::<String>();
+        out.push('…');
+    }
+    out
+}
+
 /// An unlocked vault plus its KEK — the desktop app's session state.
 pub struct Vaulted<E: Embedder> {
     vault: MemoryVault<E>,
@@ -383,6 +513,58 @@ mod tests {
     }
 
     #[test]
+    fn connector_views_derive_status_from_real_memory_sources() {
+        let memories = vec![
+            RecentMemory {
+                id: "a".into(),
+                text: "First Claude memory".into(),
+                created_at: 100,
+                source: Some("import:claude-code".into()),
+            },
+            RecentMemory {
+                id: "b".into(),
+                text: "Second Claude memory".into(),
+                created_at: 200,
+                source: Some("import:claude-code".into()),
+            },
+        ];
+
+        let views = connector_views(&memories);
+        let claude = views.iter().find(|v| v.id == "claude-code").unwrap();
+        assert_eq!(claude.status, "connected");
+        assert_eq!(claude.memory_count, 2);
+        assert_eq!(claude.last_imported_at, Some(200));
+
+        let drive = views.iter().find(|v| v.id == "google-drive").unwrap();
+        assert_eq!(drive.status, "planned");
+        assert!(drive.network);
+    }
+
+    #[test]
+    fn document_rows_can_be_filtered_and_show_friendly_source_labels() {
+        let memories = vec![
+            RecentMemory {
+                id: "a".into(),
+                text: "Trip plan\nBook train tickets".into(),
+                created_at: 200,
+                source: Some("import:obsidian".into()),
+            },
+            RecentMemory {
+                id: "b".into(),
+                text: "Pinned preference".into(),
+                created_at: 100,
+                source: Some("desktop".into()),
+            },
+        ];
+
+        let rows = document_rows(&memories, Some("import:obsidian"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "Trip plan");
+        assert_eq!(rows[0].source_label, "Obsidian");
+        assert!(rows[0].preview.contains("Book train tickets"));
+    }
+
+    #[test]
     fn forget_rejects_bad_cell_id() {
         let mut v = vaulted();
         assert!(v.forget("not-hex").is_err());
@@ -418,8 +600,7 @@ mod tests {
         assert_eq!(shares.len(), 3, "three pieces for three trusted people");
         // Any two of the three reconstruct the original 24 words.
         for (a, b) in [(0, 1), (0, 2), (1, 2)] {
-            let back =
-                super::recovery_combine(&[shares[a].clone(), shares[b].clone()]).unwrap();
+            let back = super::recovery_combine(&[shares[a].clone(), shares[b].clone()]).unwrap();
             assert_eq!(back, TEST_MNEMONIC, "pieces {a}+{b} bring the words back");
         }
         // A single piece reveals nothing and is refused.
@@ -431,7 +612,11 @@ mod tests {
     #[test]
     fn backup_id_is_stable_and_seed_bound() {
         let a = super::backup_id(TEST_MNEMONIC).unwrap();
-        assert_eq!(a, super::backup_id(TEST_MNEMONIC).unwrap(), "same seed → same slot");
+        assert_eq!(
+            a,
+            super::backup_id(TEST_MNEMONIC).unwrap(),
+            "same seed → same slot"
+        );
         assert_eq!(a.len(), 32, "16 bytes as hex");
         assert!(super::backup_id("not the words").is_err());
     }

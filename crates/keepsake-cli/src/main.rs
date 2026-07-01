@@ -32,10 +32,19 @@ enum Cmd {
         query: String,
         #[arg(long, default_value_t = 5)]
         k: usize,
-        /// Recall mode: balanced (default), semantic, recent, or graph_first.
+        /// Recall mode: balanced (default), semantic, recent, graph_first, or hybrid.
         #[arg(long, default_value = "balanced")]
         profile: String,
     },
+    /// List memory sources Keepsake can import or connect.
+    #[command(subcommand)]
+    Connectors(ConnectorsCmd),
+    /// Browse stored documents/memories by source.
+    #[command(subcommand)]
+    Docs(DocsCmd),
+    /// Show or rebuild the local derived profile.
+    #[command(subcommand)]
+    Profile(ProfileCmd),
     /// Cryptographically erase a memory by its cell id (hex).
     Forget { cell_id: String },
     /// Compact symbol-graph recall: print a terse map (entities + relations, each with a cell id)
@@ -65,6 +74,11 @@ enum Cmd {
     },
     /// Print a ready-to-paste MCP config (hub socket + a fresh token) for Claude/Cursor/Codex.
     McpConfig,
+    /// Print copyable setup steps for a local AI client.
+    McpSetup {
+        #[arg(default_value = "codex")]
+        client: String,
+    },
     /// Make connected agents use Keepsake as their PRIMARY memory: writes a high-priority
     /// "Keepsake is your memory" block atop CLAUDE.md + AGENTS.md and wires the MCP tool, so an
     /// agent always recalls from + writes to Keepsake instead of its own siloed memory.
@@ -120,6 +134,33 @@ enum PairCmd {
     Offer { code: String },
     /// On the NEW device: open an offer and reveal the seed phrase to import.
     Accept { offer: String },
+}
+
+#[derive(Subcommand)]
+enum ConnectorsCmd {
+    /// Show the connector catalog. Planned cloud entries are not auto-connected.
+    List,
+}
+
+#[derive(Subcommand)]
+enum DocsCmd {
+    /// Show recent memories, optionally limited to one source tag.
+    List {
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long, default_value_t = 25)]
+        limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProfileCmd {
+    /// Print the current local derived profile, if one exists.
+    Show,
+    /// Build a small local profile summary from recent memories.
+    Redistill,
+    /// Clear the derived profile without deleting memories.
+    Clear,
 }
 
 fn pairing_file() -> PathBuf {
@@ -194,7 +235,13 @@ fn main() {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
             let hits = vault
-                .recall_with_profile(&kek, &query, k, now, keepsake_vault::RecallProfile::parse(&profile))
+                .recall_with_profile(
+                    &kek,
+                    &query,
+                    k,
+                    now,
+                    keepsake_vault::RecallProfile::parse(&profile),
+                )
                 .expect("recall");
             if hits.is_empty() {
                 eprintln!("(no memories matched)");
@@ -202,6 +249,69 @@ fn main() {
             for (id, text) in hits {
                 println!("{}  {}", hex::encode(id.as_bytes()), text);
             }
+        }
+        Cmd::Connectors(ConnectorsCmd::List) => {
+            for c in keepsake_import::connector_catalog() {
+                let status = match c.access {
+                    keepsake_import::ConnectorAccess::CloudOAuthPlanned
+                    | keepsake_import::ConnectorAccess::Planned => "planned",
+                    _ => "available",
+                };
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    c.id,
+                    status,
+                    if c.network {
+                        "explicit network"
+                    } else {
+                        "local"
+                    },
+                    c.title
+                );
+            }
+        }
+        Cmd::Docs(DocsCmd::List { source, limit }) => {
+            let (vault, kek) = load();
+            let rows = vault.recent(&kek, limit).expect("recent memories");
+            for (id, text, created_at) in rows {
+                let src = vault.source(&id).ok().flatten();
+                if source
+                    .as_deref()
+                    .is_some_and(|wanted| src.as_deref() != Some(wanted))
+                {
+                    continue;
+                }
+                let title = text
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .unwrap_or("(untitled)");
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    hex::encode(id.as_bytes()),
+                    created_at,
+                    keepsake_import::source_label(src.as_deref()),
+                    title
+                );
+            }
+        }
+        Cmd::Profile(ProfileCmd::Show) => {
+            let (vault, _kek) = load();
+            match vault.profile().expect("profile") {
+                Some(profile) if !profile.trim().is_empty() => println!("{profile}"),
+                _ => eprintln!("(no profile yet — run `keepsake profile redistill`)"),
+            }
+        }
+        Cmd::Profile(ProfileCmd::Redistill) => {
+            let (vault, kek) = load();
+            let profile = build_local_profile_summary(&vault, &kek).expect("build profile");
+            vault.set_profile(&profile).expect("save profile");
+            println!("{profile}");
+        }
+        Cmd::Profile(ProfileCmd::Clear) => {
+            let (vault, _kek) = load();
+            vault.clear_profile().expect("clear profile");
+            println!("profile cleared; memories kept");
         }
         Cmd::Forget { cell_id } => {
             let (mut vault, _kek) = load();
@@ -267,6 +377,9 @@ fn main() {
                 "\nStart the hub first:  keepsake serve\nThen paste the JSON above into your MCP client's config (e.g. Claude Desktop)."
             );
         }
+        Cmd::McpSetup { client } => {
+            println!("{}", mcp_setup_text(&client));
+        }
         Cmd::Connect { dir } => {
             let base = std::path::Path::new(&dir);
             let block = keepsake_instruction_block();
@@ -307,7 +420,14 @@ fn main() {
                 "keepsake recall-hook",
                 false,
             );
-            let s2 = upsert_hook(&s1, "Stop", None, &remember_cmd, "keepsake remember-hook", true);
+            let s2 = upsert_hook(
+                &s1,
+                "Stop",
+                None,
+                &remember_cmd,
+                "keepsake remember-hook",
+                true,
+            );
             if let Some(parent) = settings_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -374,7 +494,9 @@ fn main() {
             let bytes = std::fs::read(&file).expect("read passport file");
             let passport: keepsake_store_sqlite::Passport =
                 serde_json::from_slice(&bytes).expect("parse passport file");
-            let n = vault.import_passport(&kek, &passport).expect("import passport");
+            let n = vault
+                .import_passport(&kek, &passport)
+                .expect("import passport");
             println!("imported {n} records from {file}");
         }
         Cmd::Backup { url } => {
@@ -391,13 +513,19 @@ fn main() {
                 let (session_key, export_key) = match client.login(&id, password.as_bytes()).await {
                     Ok(v) => v,
                     Err(keepsake_relay::RelayError::Status(404)) => {
-                        client.register(&id, password.as_bytes()).await.expect("register");
+                        client
+                            .register(&id, password.as_bytes())
+                            .await
+                            .expect("register");
                         client.login(&id, password.as_bytes()).await.expect("login")
                     }
                     Err(_) => panic!("backup login failed (wrong password?)"),
                 };
                 let blob = keepsake_backup::lock_blob(&export_key, &bytes).expect("lock blob");
-                client.upload(&id, &session_key, blob).await.expect("upload");
+                client
+                    .upload(&id, &session_key, blob)
+                    .await
+                    .expect("upload");
             });
             eprintln!("backed up {count} memories (encrypted; the server never sees them).");
         }
@@ -420,7 +548,9 @@ fn main() {
                 let bytes = keepsake_backup::unlock_blob(&export_key, &blob).expect("unlock blob");
                 let passport: keepsake_store_sqlite::Passport =
                     serde_json::from_slice(&bytes).expect("parse passport");
-                vault.import_passport(&kek, &passport).expect("import passport")
+                vault
+                    .import_passport(&kek, &passport)
+                    .expect("import passport")
             });
             println!("restored {n} records from backup.");
         }
@@ -434,12 +564,19 @@ fn main() {
             let pulled = run_async(async move {
                 let client = keepsake_relay::RelayClient::new(&url, "");
                 // Pull remote changes first (merge them in), then push our merged state back.
-                let pulled = keepsake_relay::pull_and_apply_owned(&client, &slot, &store, &sync_key)
-                    .await
-                    .expect("pull from relay");
-                keepsake_relay::push_snapshot_owned(&client, &slot, &write_token, &store, &sync_key)
-                    .await
-                    .expect("push to relay");
+                let pulled =
+                    keepsake_relay::pull_and_apply_owned(&client, &slot, &store, &sync_key)
+                        .await
+                        .expect("pull from relay");
+                keepsake_relay::push_snapshot_owned(
+                    &client,
+                    &slot,
+                    &write_token,
+                    &store,
+                    &sync_key,
+                )
+                .await
+                .expect("push to relay");
                 pulled
             });
             println!("synced (remote changes applied: {pulled}). The relay sees only ciphertext.");
@@ -515,8 +652,9 @@ fn main() {
 
                 // Authenticated accept: the user must confirm the SAS matches the offering
                 // device before the seed is revealed (KS-012).
-                let sas = keepsake_crypto::pairing::pairing_sas(&device.pairing_code(), &offer_bytes)
-                    .expect("offer is too short");
+                let sas =
+                    keepsake_crypto::pairing::pairing_sas(&device.pairing_code(), &offer_bytes)
+                        .expect("offer is too short");
                 use std::io::Write;
                 eprint!(
                     "🔐 Verification code: {sas}\nType the code shown on your OTHER device to confirm: "
@@ -811,6 +949,69 @@ fn mcp_config_json(socket: &str, token: &str) -> String {
     .expect("serialize MCP config")
 }
 
+fn mcp_setup_text(client: &str) -> String {
+    let label = match client.trim().to_ascii_lowercase().as_str() {
+        "claude" | "claude-code" | "claude code" => "Claude Code",
+        "cursor" => "Cursor",
+        "opencode" | "open-code" | "open code" => "OpenCode",
+        "codex" => "Codex",
+        _ => "Your AI client",
+    };
+    format!(
+        "Keepsake MCP setup for {label}\n\n\
+1. Start the local memory hub:\n\
+   keepsake serve\n\n\
+2. Print the MCP config with a scoped local token:\n\
+   keepsake mcp-config\n\n\
+3. In a project you want agents to remember, wire the instructions and MCP config:\n\
+   keepsake connect --dir .\n\n\
+Your 24 words are never copied into the client. The client gets a limited local pass."
+    )
+}
+
+fn build_local_profile_summary(
+    vault: &MemoryVault<FastEmbedder>,
+    kek: &Kek,
+) -> Result<String, keepsake_store_sqlite::StoreError> {
+    let recent = vault.recent(kek, 200)?;
+    let mut sources: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut examples = Vec::new();
+    for (id, text, _) in &recent {
+        let source = vault.source(id)?;
+        *sources
+            .entry(keepsake_import::source_label(source.as_deref()))
+            .or_default() += 1;
+        if examples.len() < 5 {
+            let title = text
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or("(untitled)");
+            examples.push(title.to_string());
+        }
+    }
+    let mut out = String::from("# Keepsake profile\n\n");
+    out.push_str(&format!("- Memories sampled: {}\n", recent.len()));
+    if !sources.is_empty() {
+        let source_line = sources
+            .into_iter()
+            .map(|(source, count)| format!("{source} ({count})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!("- Sources: {source_line}\n"));
+    }
+    if !examples.is_empty() {
+        out.push_str("- Recent themes:\n");
+        for ex in examples {
+            out.push_str("  - ");
+            out.push_str(&ex);
+            out.push('\n');
+        }
+    }
+    out.push_str("\nThis profile was built locally from recent memories.");
+    Ok(out)
+}
+
 /// Unlock the vault from the seed and run the shared hub over its Unix socket.
 async fn serve_daemon() {
     let mnemonic =
@@ -826,8 +1027,11 @@ async fn serve_daemon() {
     let mut vault = MemoryVault::new(store, embedder);
     vault.rebuild_index(&kek).expect("rebuild index");
 
-    let state =
-        std::sync::Arc::new(keepsake_daemon::DaemonState::new(vault, kek, roots.capability_root()));
+    let state = std::sync::Arc::new(keepsake_daemon::DaemonState::new(
+        vault,
+        kek,
+        roots.capability_root(),
+    ));
     let sock = socket_path();
     if let Some(parent) = sock.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -855,7 +1059,10 @@ mod tests {
     }
 
     fn authz(token: &str, r: &[u8; 32]) -> keepsake_firewall::capability::Authorization {
-        CapabilityToken::decode_hex(token).unwrap().authorize(r).unwrap()
+        CapabilityToken::decode_hex(token)
+            .unwrap()
+            .authorize(r)
+            .unwrap()
     }
 
     #[test]
@@ -917,14 +1124,20 @@ mod tests {
         assert!(fresh.contains("keepsake") && fresh.contains("/sock"));
         let existing = r#"{"mcpServers":{"other":{"command":"x"}}}"#;
         let merged = merge_mcp_json(existing, "/sock", "tok");
-        assert!(merged.contains("\"other\""), "other server preserved: {merged}");
+        assert!(
+            merged.contains("\"other\""),
+            "other server preserved: {merged}"
+        );
         assert!(merged.contains("\"keepsake\""));
     }
 
     #[test]
     fn session_start_context_lists_profile_then_recent() {
         assert_eq!(session_start_context(None, &[]), "");
-        let c = session_start_context(Some("User ships Rust crates."), &["prefers TDD".to_string()]);
+        let c = session_start_context(
+            Some("User ships Rust crates."),
+            &["prefers TDD".to_string()],
+        );
         assert!(c.contains("Profile") && c.contains("User ships Rust crates."));
         assert!(c.contains("- prefers TDD"));
     }
@@ -941,13 +1154,17 @@ mod tests {
             Some("second and final question")
         );
         let arr = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi there friend\"}]}}";
-        assert_eq!(last_user_text_from_transcript(arr).as_deref(), Some("hi there friend"));
+        assert_eq!(
+            last_user_text_from_transcript(arr).as_deref(),
+            Some("hi there friend")
+        );
         assert_eq!(last_user_text_from_transcript("garbage\n\n"), None);
     }
 
     #[test]
     fn upsert_hook_is_idempotent_and_preserves_others() {
-        let pre = r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo other"}]}]}}"#;
+        let pre =
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo other"}]}]}}"#;
         let a = upsert_hook(
             pre,
             "SessionStart",
@@ -987,5 +1204,14 @@ mod tests {
             v["mcpServers"]["keepsake"]["env"]["KEEPSAKE_CAPABILITY"],
             "deadbeef"
         );
+    }
+
+    #[test]
+    fn mcp_setup_text_gives_copyable_steps_for_codex() {
+        let text = mcp_setup_text("codex");
+        assert!(text.contains("Codex"));
+        assert!(text.contains("keepsake serve"));
+        assert!(text.contains("keepsake mcp-config"));
+        assert!(text.contains("keepsake connect"));
     }
 }

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use keepsake_core::CellId;
 use keepsake_crypto::{Kek, RootKeys};
 use keepsake_daemon::{run_sync_loop, DaemonState};
-use keepsake_desktop_core::{MemoryHit, RecentMemory, VaultStatus};
+use keepsake_desktop_core::{DocumentRow, MemoryHit, RecentMemory, VaultStatus};
 use keepsake_retrieval::FastEmbedder;
 use keepsake_store_sqlite::SqliteVault;
 use keepsake_vault::MemoryVault;
@@ -114,14 +114,23 @@ async fn upload_backup(id: &str, password: &str, bytes: Vec<u8>) -> Result<(), S
     let (session_key, export_key) = match client.login(id, password.as_bytes()).await {
         Ok(v) => v,
         Err(keepsake_relay::RelayError::Status(404)) => {
-            client.register(id, password.as_bytes()).await.map_err(backup_err)?;
-            client.login(id, password.as_bytes()).await.map_err(backup_err)?
+            client
+                .register(id, password.as_bytes())
+                .await
+                .map_err(backup_err)?;
+            client
+                .login(id, password.as_bytes())
+                .await
+                .map_err(backup_err)?
         }
         Err(e) => return Err(backup_err(e)),
     };
     let blob = keepsake_backup::lock_blob(&export_key, &bytes)
         .map_err(|_| "could not seal your safe copy".to_string())?;
-    client.upload(id, &session_key, blob).await.map_err(backup_err)
+    client
+        .upload(id, &session_key, blob)
+        .await
+        .map_err(backup_err)
 }
 
 /// Turn on the safe copy with `password` and upload now. The password is held in the session so
@@ -201,7 +210,10 @@ async fn backup_restore(state: State<'_, AppState>, password: String) -> Result<
         serde_json::from_slice(&bytes).map_err(|_| "the safe copy was unreadable".to_string())?;
     let guard = state.0.lock().unwrap();
     let session = guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
-    let mut vault = session.vault.lock().map_err(|_| "vault poisoned".to_string())?;
+    let mut vault = session
+        .vault
+        .lock()
+        .map_err(|_| "vault poisoned".to_string())?;
     vault
         .import_passport(&session.kek, &passport)
         .map_err(|e| format!("{e:?}"))
@@ -231,6 +243,16 @@ struct ImportResult {
     total: usize,
 }
 
+#[derive(serde::Serialize)]
+struct ConnectorActionResult {
+    connector_id: String,
+    message: String,
+    added: usize,
+    skipped: usize,
+    merged: usize,
+    total: usize,
+}
+
 /// Build a preview (counts by role) from a parsed item list.
 fn preview_of(items: Vec<keepsake_import::MemoryItem>) -> ImportPreview {
     let mut roles: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
@@ -244,17 +266,65 @@ fn preview_of(items: Vec<keepsake_import::MemoryItem>) -> ImportPreview {
     }
 }
 
+fn read_connector_items(connector_id: &str) -> Result<Vec<keepsake_import::MemoryItem>, String> {
+    let spec = keepsake_import::connector_by_id(connector_id)
+        .ok_or_else(|| format!("unknown connector: {connector_id}"))?;
+    if spec.network {
+        return Err(format!(
+            "{} is planned and will not make a network call until an explicit setup flow exists",
+            spec.title
+        ));
+    }
+    let home = std::path::PathBuf::from(std::env::var("HOME").map_err(|_| "no HOME".to_string())?);
+    match connector_id {
+        "claude-code" => Ok(keepsake_import::read_claude_code(&home, &[])),
+        "coding-agents" => Ok(keepsake_import::read_coding_agents(&home)),
+        "obsidian" => Ok(keepsake_import::read_obsidian(&home)),
+        "local-folder" | "chatgpt-export" | "chromadb" => Err(format!(
+            "{} needs a user-picked file or folder; use import_path",
+            spec.title
+        )),
+        "paste" => Err("Paste memories needs user-provided text; use import_paste".to_string()),
+        "mcp-agents" => Err("Agent setup has no documents to import".to_string()),
+        _ => Err(format!("{} is not importable yet", spec.title)),
+    }
+}
+
+fn commit_import_items(
+    vault: &mut MemoryVault<FastEmbedder>,
+    kek: &Kek,
+    items: &[keepsake_import::MemoryItem],
+) -> ImportResult {
+    let mut added = 0usize;
+    let mut skipped = 0usize;
+    for it in items {
+        match vault.remember_deduped_with_source(
+            kek,
+            &it.text,
+            keepsake_vault::DEDUP_THRESHOLD,
+            it.created_at,
+            Some(&it.source),
+        ) {
+            Ok((_, true)) => added += 1,
+            Ok((_, false)) => skipped += 1,
+            Err(_) => {}
+        }
+    }
+    let merged = vault
+        .consolidate(keepsake_vault::DEDUP_THRESHOLD)
+        .unwrap_or(0);
+    ImportResult {
+        added,
+        skipped,
+        merged,
+        total: items.len(),
+    }
+}
+
 /// Scan a known source for memory and return a preview (no writes). v1 source: "claude-code".
 #[tauri::command]
 fn import_preview(source: String) -> Result<ImportPreview, String> {
-    let home = std::path::PathBuf::from(std::env::var("HOME").map_err(|_| "no HOME".to_string())?);
-    let items = match source.as_str() {
-        "claude-code" => keepsake_import::read_claude_code(&home, &[]),
-        "coding-agents" => keepsake_import::read_coding_agents(&home),
-        "obsidian" => keepsake_import::read_obsidian(&home),
-        other => return Err(format!("unknown import source: {other}")),
-    };
-    Ok(preview_of(items))
+    Ok(preview_of(read_connector_items(&source)?))
 }
 
 /// Universal: preview any folder/file/ZIP the user picked (no writes).
@@ -283,30 +353,7 @@ fn import_commit(
     items: Vec<keepsake_import::MemoryItem>,
 ) -> Result<ImportResult, String> {
     with_vault(&state, |vault, kek| {
-        let mut added = 0usize;
-        let mut skipped = 0usize;
-        for it in &items {
-            match vault.remember_deduped_with_source(
-                kek,
-                &it.text,
-                keepsake_vault::DEDUP_THRESHOLD,
-                it.created_at,
-                Some(&it.source),
-            ) {
-                Ok((_, true)) => added += 1,
-                Ok((_, false)) => skipped += 1,
-                Err(_) => {}
-            }
-        }
-        let merged = vault
-            .consolidate(keepsake_vault::DEDUP_THRESHOLD)
-            .unwrap_or(0);
-        Ok(ImportResult {
-            added,
-            skipped,
-            merged,
-            total: items.len(),
-        })
+        Ok(commit_import_items(vault, kek, &items))
     })
 }
 
@@ -363,6 +410,196 @@ fn memory_graph(state: State<AppState>) -> Result<GraphDto, String> {
                 .collect(),
         })
     })
+}
+
+#[tauri::command]
+fn connector_catalog(
+    state: State<AppState>,
+) -> Result<Vec<keepsake_desktop_core::ConnectorView>, String> {
+    with_vault(&state, |vault, kek| {
+        let memories = recent_memories(vault, kek, 5000)?;
+        Ok(keepsake_desktop_core::connector_views(&memories))
+    })
+}
+
+#[tauri::command]
+fn connector_status(
+    state: State<AppState>,
+    connector_id: String,
+) -> Result<keepsake_desktop_core::ConnectorView, String> {
+    with_vault(&state, |vault, kek| {
+        let memories = recent_memories(vault, kek, 5000)?;
+        keepsake_desktop_core::connector_views(&memories)
+            .into_iter()
+            .find(|c| c.id == connector_id)
+            .ok_or_else(|| format!("unknown connector: {connector_id}"))
+    })
+}
+
+#[tauri::command]
+fn connector_preview(connector_id: String) -> Result<ImportPreview, String> {
+    Ok(preview_of(read_connector_items(&connector_id)?))
+}
+
+#[tauri::command]
+fn connector_sync_now(
+    state: State<AppState>,
+    connector_id: String,
+) -> Result<ConnectorActionResult, String> {
+    let items = read_connector_items(&connector_id)?;
+    with_vault(&state, |vault, kek| {
+        let result = commit_import_items(vault, kek, &items);
+        Ok(ConnectorActionResult {
+            connector_id,
+            message: "local sync complete".to_string(),
+            added: result.added,
+            skipped: result.skipped,
+            merged: result.merged,
+            total: result.total,
+        })
+    })
+}
+
+#[tauri::command]
+fn connector_disconnect(
+    state: State<AppState>,
+    connector_id: String,
+) -> Result<ConnectorActionResult, String> {
+    let spec = keepsake_import::connector_by_id(&connector_id)
+        .ok_or_else(|| format!("unknown connector: {connector_id}"))?;
+    let source_tag = spec
+        .source_tag
+        .ok_or_else(|| format!("{} has no stored documents to disconnect", spec.title))?;
+    with_vault(&state, |vault, kek| {
+        let memories = recent_memories(vault, kek, 5000)?;
+        let mut removed = 0usize;
+        for memory in memories {
+            if keepsake_desktop_core::source_matches(Some(source_tag), memory.source.as_deref()) {
+                let bytes =
+                    hex::decode(&memory.id).map_err(|_| "invalid cell id (not hex)".to_string())?;
+                let arr: [u8; 32] = bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| "cell id must be 32 bytes".to_string())?;
+                vault
+                    .forget(&CellId::from_bytes(arr))
+                    .map_err(|e| format!("{e:?}"))?;
+                removed += 1;
+            }
+        }
+        Ok(ConnectorActionResult {
+            connector_id,
+            message: "source disconnected locally".to_string(),
+            added: 0,
+            skipped: 0,
+            merged: 0,
+            total: removed,
+        })
+    })
+}
+
+#[tauri::command]
+fn documents_list(
+    state: State<AppState>,
+    source: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<DocumentRow>, String> {
+    with_vault(&state, |vault, kek| {
+        let memories = recent_memories(vault, kek, limit.unwrap_or(200).min(5000))?;
+        Ok(keepsake_desktop_core::document_rows(
+            &memories,
+            source.as_deref(),
+        ))
+    })
+}
+
+#[tauri::command]
+fn document_retry(state: State<AppState>, source: String) -> Result<ConnectorActionResult, String> {
+    let connector_id = keepsake_import::connector_catalog()
+        .into_iter()
+        .find(|c| c.source_tag == Some(source.as_str()))
+        .map(|c| c.id.to_string())
+        .ok_or_else(|| format!("no connector for source: {source}"))?;
+    connector_sync_now(state, connector_id)
+}
+
+#[tauri::command]
+fn document_delete(state: State<AppState>, id: String) -> Result<(), String> {
+    forget(state, id)
+}
+
+#[tauri::command]
+fn documents_delete_source(
+    state: State<AppState>,
+    source: String,
+) -> Result<ConnectorActionResult, String> {
+    let connector_id = keepsake_import::connector_catalog()
+        .into_iter()
+        .find(|c| c.source_tag == Some(source.as_str()))
+        .map(|c| c.id.to_string())
+        .unwrap_or_else(|| source.clone());
+    connector_disconnect(state, connector_id)
+}
+
+#[derive(serde::Serialize)]
+struct ProfileDto {
+    text: Option<String>,
+    memory_count: usize,
+    sources: Vec<(String, usize)>,
+}
+
+#[tauri::command]
+fn profile_get(state: State<AppState>) -> Result<ProfileDto, String> {
+    with_vault(&state, |vault, kek| {
+        let memories = recent_memories(vault, kek, 5000)?;
+        Ok(ProfileDto {
+            text: vault.profile().map_err(|e| format!("{e:?}"))?,
+            memory_count: vault.count().map_err(|e| format!("{e:?}"))?,
+            sources: source_breakdown(&memories),
+        })
+    })
+}
+
+#[tauri::command]
+fn profile_redistill(state: State<AppState>) -> Result<ProfileDto, String> {
+    with_vault(&state, |vault, kek| {
+        let memories = recent_memories(vault, kek, 5000)?;
+        let text = local_profile_summary(&memories);
+        vault.set_profile(&text).map_err(|e| format!("{e:?}"))?;
+        Ok(ProfileDto {
+            text: Some(text),
+            memory_count: vault.count().map_err(|e| format!("{e:?}"))?,
+            sources: source_breakdown(&memories),
+        })
+    })
+}
+
+#[tauri::command]
+fn profile_clear(state: State<AppState>) -> Result<(), String> {
+    with_vault(&state, |vault, _kek| {
+        vault.clear_profile().map_err(|e| format!("{e:?}"))
+    })
+}
+
+#[tauri::command]
+fn mcp_setup_text(client: String) -> String {
+    let label = match client.trim().to_ascii_lowercase().as_str() {
+        "claude" | "claude-code" | "claude code" => "Claude Code",
+        "cursor" => "Cursor",
+        "opencode" | "open-code" | "open code" => "OpenCode",
+        "codex" => "Codex",
+        _ => "Your AI client",
+    };
+    format!(
+        "Keepsake MCP setup for {label}\n\n\
+1. Start the local memory hub:\n\
+   keepsake serve\n\n\
+2. Print the MCP config with a scoped local token:\n\
+   keepsake mcp-config\n\n\
+3. In a project you want agents to remember, wire instructions and MCP config:\n\
+   keepsake connect --dir .\n\n\
+Your 24 words are never copied into the client. The client gets a limited local pass."
+    )
 }
 
 /// How often the background task reconciles the vault with the relay.
@@ -441,7 +678,10 @@ fn with_vault<T>(
 ) -> Result<T, String> {
     let guard = state.0.lock().unwrap();
     let session = guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
-    let mut vault = session.vault.lock().map_err(|_| "vault poisoned".to_string())?;
+    let mut vault = session
+        .vault
+        .lock()
+        .map_err(|_| "vault poisoned".to_string())?;
     f(&mut vault, &session.kek)
 }
 
@@ -586,8 +826,10 @@ fn quick_unlock_enable(state: State<AppState>, pin: String) -> Result<(), String
     let session = guard.as_ref().ok_or_else(|| "vault locked".to_string())?;
     let wrapped = keepsake_crypto::quickunlock::wrap_mnemonic(&pin, &session.mnemonic);
     let file = keepsake_desktop_core::quickunlock::QuickUnlockFile::new(wrapped);
-    file.save(&keepsake_desktop_core::quickunlock::quickunlock_path(&keepsake_dir()))
-        .map_err(|e| format!("could not turn on quick unlock: {e}"))
+    file.save(&keepsake_desktop_core::quickunlock::quickunlock_path(
+        &keepsake_dir(),
+    ))
+    .map_err(|e| format!("could not turn on quick unlock: {e}"))
 }
 
 /// Open the vault with the quick-unlock PIN. Wrong PINs are counted; after the cap the sidecar is
@@ -608,9 +850,8 @@ fn quick_unlock(
             unlock_with_mnemonic(&app, &state, &mnemonic)
         }
         Err(_) => {
-            let remaining =
-                keepsake_desktop_core::quickunlock::quickunlock_register_failure(&path)
-                    .unwrap_or(0);
+            let remaining = keepsake_desktop_core::quickunlock::quickunlock_register_failure(&path)
+                .unwrap_or(0);
             if remaining == 0 {
                 Err("Too many wrong tries — please use your 24 words.".to_string())
             } else if remaining == 1 {
@@ -655,7 +896,8 @@ fn quick_unlock_change_pin(
     let wrapped = keepsake_crypto::quickunlock::wrap_mnemonic(&fresh, &mnemonic);
     let mut nf = keepsake_desktop_core::quickunlock::QuickUnlockFile::new(wrapped);
     nf.touchid = file.touchid;
-    nf.save(&path).map_err(|e| format!("could not change your PIN: {e}"))
+    nf.save(&path)
+        .map_err(|e| format!("could not change your PIN: {e}"))
 }
 
 #[tauri::command]
@@ -777,20 +1019,101 @@ fn recall(state: State<AppState>, query: String, k: usize) -> Result<Vec<MemoryH
 }
 
 #[tauri::command]
-fn recent(state: State<AppState>, limit: usize) -> Result<Vec<RecentMemory>, String> {
+fn recall_with_mode(
+    state: State<AppState>,
+    query: String,
+    k: usize,
+    mode: String,
+) -> Result<Vec<MemoryHit>, String> {
     with_vault(&state, |vault, kek| {
         Ok(vault
-            .recent(kek, limit)
+            .recall_with_profile(
+                kek,
+                &query,
+                k,
+                now_unix(),
+                keepsake_vault::RecallProfile::parse(&mode),
+            )
             .map_err(|e| format!("{e:?}"))?
             .into_iter()
-            .map(|(id, text, created_at)| RecentMemory {
+            .map(|(id, text)| MemoryHit {
                 source: vault.source(&id).ok().flatten(),
                 id: hex::encode(id.as_bytes()),
                 text,
-                created_at,
             })
             .collect())
     })
+}
+
+#[tauri::command]
+fn recent(state: State<AppState>, limit: usize) -> Result<Vec<RecentMemory>, String> {
+    with_vault(&state, |vault, kek| recent_memories(vault, kek, limit))
+}
+
+fn recent_memories(
+    vault: &mut MemoryVault<FastEmbedder>,
+    kek: &Kek,
+    limit: usize,
+) -> Result<Vec<RecentMemory>, String> {
+    Ok(vault
+        .recent(kek, limit)
+        .map_err(|e| format!("{e:?}"))?
+        .into_iter()
+        .map(|(id, text, created_at)| RecentMemory {
+            source: vault.source(&id).ok().flatten(),
+            id: hex::encode(id.as_bytes()),
+            text,
+            created_at,
+        })
+        .collect())
+}
+
+fn source_breakdown(memories: &[RecentMemory]) -> Vec<(String, usize)> {
+    let mut counts = std::collections::BTreeMap::new();
+    for memory in memories {
+        *counts
+            .entry(keepsake_import::source_label(memory.source.as_deref()))
+            .or_insert(0usize) += 1;
+    }
+    counts.into_iter().collect()
+}
+
+fn local_profile_summary(memories: &[RecentMemory]) -> String {
+    let mut out = String::from("# Keepsake profile\n\n");
+    out.push_str(&format!("- Memories sampled: {}\n", memories.len()));
+    let sources = source_breakdown(memories);
+    if !sources.is_empty() {
+        out.push_str("- Sources: ");
+        out.push_str(
+            &sources
+                .iter()
+                .map(|(source, count)| format!("{source} ({count})"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        out.push('\n');
+    }
+    let recent_titles: Vec<String> = memories
+        .iter()
+        .take(5)
+        .filter_map(|m| {
+            m.text
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map(str::to_string)
+        })
+        .collect();
+    if !recent_titles.is_empty() {
+        out.push_str("- Recent themes:\n");
+        for title in recent_titles {
+            out.push_str("  - ");
+            out.push_str(&title);
+            out.push('\n');
+        }
+    }
+    out.push_str("\nThis profile was built locally from recent memories.");
+    out
 }
 
 #[tauri::command]
@@ -864,6 +1187,7 @@ pub fn run() {
             lock,
             remember,
             recall,
+            recall_with_mode,
             recent,
             forget,
             status,
@@ -886,6 +1210,19 @@ pub fn run() {
             import_paste,
             import_commit,
             memory_graph,
+            connector_catalog,
+            connector_status,
+            connector_preview,
+            connector_sync_now,
+            connector_disconnect,
+            documents_list,
+            document_retry,
+            document_delete,
+            documents_delete_source,
+            profile_get,
+            profile_redistill,
+            profile_clear,
+            mcp_setup_text,
             quick_unlock_available,
             quick_unlock_enable,
             quick_unlock,

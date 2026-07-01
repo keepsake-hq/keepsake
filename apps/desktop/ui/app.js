@@ -70,6 +70,8 @@ const ICON_PLANE =
 const TRAVEL_RE = /\b(flight|fly|flying|travel|trip|berlin|hotel|airport|vacation)\b/i;
 
 let SETTINGS_COUNT = 0;
+let SEARCH_MODE = "balanced";
+let ACTIVE_AGENT_CLIENT = "codex";
 
 const AUTH_SCREENS = ["onboarding", "unlock", "lostaccess", "reset"];
 function show(id) {
@@ -170,10 +172,12 @@ function sourceLabel(source) {
   if (!source) return "";
   if (source === "desktop") return "added here";
   if (source === "cli") return "terminal";
+  if (source === "fact") return "profile fact";
   const p = source.split(":");
   if (p[0] === "proxy") return "via " + niceModel(p[p.length - 1]);
   if (p[0] === "mcp") return "via " + niceModel(p[1] || "agent");
-  return source;
+  if (p[0] === "import") return niceSource(p.slice(1).join(":"));
+  return niceSource(source);
 }
 function niceModel(m) {
   const s = (m || "").toLowerCase();
@@ -183,6 +187,25 @@ function niceModel(m) {
   if (s.includes("gemini")) return "Gemini";
   if (s.includes("mistral")) return "Mistral";
   return m ? m.charAt(0).toUpperCase() + m.slice(1) : "a model";
+}
+function niceSource(s) {
+  const known = {
+    "claude-code": "Claude Code",
+    "coding-agents": "Coding agents",
+    obsidian: "Obsidian",
+    folder: "Files",
+    paste: "Pasted text",
+    chromadb: "ChromaDB",
+    "google-drive": "Google Drive",
+    notion: "Notion",
+    github: "GitHub",
+    gmail: "Gmail",
+  };
+  return known[s] || String(s || "")
+    .split(/[-_:]/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function renderTimeline(memories) {
@@ -240,6 +263,8 @@ async function refresh() {
     SETTINGS_COUNT = DEMO_MEMORIES.length;
     renderTimeline(DEMO_MEMORIES);
     renderAll(DEMO_MEMORIES);
+    refreshSources();
+    refreshProfile();
     return;
   }
   try {
@@ -253,6 +278,235 @@ async function refresh() {
   try {
     renderAll(await invoke("recent", { limit: 100 }));
   } catch (_) {}
+  refreshSources();
+  refreshProfile();
+}
+
+function statusLabel(status) {
+  return status === "connected" ? "Connected" : status === "planned" ? "Planned" : "Available";
+}
+function statusClass(status) {
+  if (status === "connected") return "bg-brand-50 text-brand-800 border-brand-200";
+  if (status === "planned") return "bg-amber-50 text-amber-800 border-amber-200";
+  return "bg-canvas text-muted border-line";
+}
+function connectorInitial(title) {
+  return (title || "?").split(/\s+/).map((p) => p[0]).join("").slice(0, 2).toUpperCase();
+}
+function demoConnectors() {
+  const specs = [
+    ["claude-code", "Claude Code", "Import local CLAUDE.md rules and memory notes.", "AI chats", "import:claude-code", "local-auto", false, true, "Scan this Mac", "Reads local files only. Nothing leaves this computer."],
+    ["coding-agents", "Coding agents", "Bring in Codex, Cursor, Gemini, Aider, Continue, and AGENTS.md rules.", "AI chats", "import:coding-agents", "local-auto", false, true, "Scan this Mac", "Reads local rule and memory files only."],
+    ["obsidian", "Obsidian", "Read detected Obsidian vaults as local Markdown notes.", "Notes", "import:obsidian", "local-auto", false, true, "Scan vaults", "Reads local vault folders only."],
+    ["local-folder", "Files and folders", "Import Markdown, text, JSON, CSV, ENEX, ZIP, and ChromaDB files.", "Files", "import:folder", "local-picker", false, true, "Pick file or folder", "You choose the path. Keepsake only reads that local selection."],
+    ["paste", "Paste memories", "Paste saved memories or an export from another assistant.", "AI chats", "import:paste", "paste", false, true, "Paste text", "Parsed locally before import."],
+    ["mcp-agents", "Claude, Cursor, Codex, OpenCode", "Connect local agents to one shared Keepsake memory hub.", "Agents", "mcp", "agent-setup", false, false, "Show setup", "Agents receive a scoped local pass, never your 24 words."],
+    ["google-drive", "Google Drive", "Scoped folder or file import for Drive documents.", "Cloud", "import:google-drive", "cloud-oauth-planned", true, false, "Planned", "Only after you connect it. No background network by default."],
+    ["notion", "Notion", "Import selected pages and database rows.", "Cloud", "import:notion", "cloud-oauth-planned", true, false, "Planned", "Only after you connect it. OAuth tokens stay local-only."],
+    ["github", "GitHub", "Bring in selected issues, discussions, docs, or repos.", "Cloud", "import:github", "cloud-oauth-planned", true, false, "Planned", "Only after you connect it. No repository is scanned automatically."],
+    ["gmail", "Gmail", "Import selected mail threads as searchable memories.", "Cloud", "import:gmail", "cloud-oauth-planned", true, false, "Planned", "Only after you connect it. No mail sync runs in the background."],
+  ];
+  return specs.map(([id, title, description, category, source_tag, access, network, supports_preview, primary_action, privacy_note]) => {
+    const matches = DEMO_MEMORIES.filter((m) => source_tag === "mcp" ? (m.source || "").startsWith("mcp:") : m.source === source_tag);
+    const planned = access.includes("planned");
+    return {
+      id, title, description, category, source_tag, access, network, supports_preview,
+      primary_action, privacy_note,
+      status: matches.length ? "connected" : planned ? "planned" : "available",
+      memory_count: matches.length,
+      last_imported_at: matches[0] ? matches[0].created_at : null,
+    };
+  });
+}
+function demoDocuments() {
+  return DEMO_MEMORIES.map((m) => ({
+    id: m.id,
+    title: (m.text.split("\n").find(Boolean) || "Untitled memory").trim(),
+    preview: m.text.replace(/\s*\n\s*/g, " ").slice(0, 220),
+    source: m.source || null,
+    source_label: sourceLabel(m.source) || "Unknown source",
+    created_at: m.created_at,
+  }));
+}
+
+async function refreshSources() {
+  const starters = $("#connector-starters");
+  const list = $("#connector-list");
+  const docs = $("#document-list");
+  if (!starters || !list || !docs) return;
+  let connectors = [];
+  let documents = [];
+  if (DEMO || !invoke) {
+    connectors = demoConnectors();
+    documents = demoDocuments();
+  } else {
+    try { connectors = await invoke("connector_catalog"); } catch (_) { connectors = []; }
+    try { documents = await invoke("documents_list", { source: null, limit: 24 }); } catch (_) { documents = []; }
+  }
+  $("#connector-count").textContent = connectors.length ? `${connectors.length} sources` : "";
+  const starterIds = ["claude-code", "local-folder", "mcp-agents"];
+  starters.innerHTML = starterIds
+    .map((id) => connectors.find((c) => c.id === id))
+    .filter(Boolean)
+    .map(renderConnectorCard)
+    .join("");
+  list.innerHTML = connectors.map(renderConnectorRow).join("");
+  renderDocuments(documents);
+  document.querySelectorAll("[data-connector-action]").forEach((b) =>
+    b.addEventListener("click", () => connectorAction(b.dataset.connectorAction)),
+  );
+}
+
+function renderConnectorCard(c) {
+  return `
+    <div class="rounded-2xl border-2 border-line bg-surface p-5">
+      <div class="flex items-start justify-between gap-3">
+        <div class="w-11 h-11 rounded-xl bg-canvas border border-line flex items-center justify-center text-sm font-bold text-ink">${escapeHtml(connectorInitial(c.title))}</div>
+        <span class="inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusClass(c.status)}">${statusLabel(c.status)}</span>
+      </div>
+      <h3 class="mt-4 text-lg font-semibold text-ink">${escapeHtml(c.title)}</h3>
+      <p class="mt-1 text-sm text-muted leading-relaxed">${escapeHtml(c.description)}</p>
+      <p class="mt-3 text-xs text-muted">${escapeHtml(c.privacy_note)}</p>
+      <button data-connector-action="${escapeHtml(c.id)}" class="mt-4 min-h-[44px] w-full rounded-xl ${c.status === "planned" ? "border-2 border-line text-muted" : "bg-brand-700 text-white hover:bg-brand-800"} text-sm font-semibold transition">${escapeHtml(c.primary_action)}</button>
+    </div>`;
+}
+function renderConnectorRow(c) {
+  const count = c.memory_count ? `${c.memory_count} ${c.memory_count === 1 ? "memory" : "memories"}` : c.network ? "Needs explicit connect" : "Ready";
+  return `
+    <button data-connector-action="${escapeHtml(c.id)}" class="w-full rounded-2xl border border-line bg-surface px-4 py-3 text-left hover:bg-canvas transition">
+      <div class="flex items-center gap-3">
+        <span class="w-10 h-10 rounded-xl bg-canvas border border-line flex items-center justify-center text-xs font-bold text-ink">${escapeHtml(connectorInitial(c.title))}</span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-sm font-semibold text-ink truncate">${escapeHtml(c.title)}</span>
+          <span class="block text-xs text-muted truncate">${escapeHtml(c.category)} · ${escapeHtml(count)}</span>
+        </span>
+        <span class="inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusClass(c.status)}">${statusLabel(c.status)}</span>
+      </div>
+    </button>`;
+}
+function renderDocuments(documents) {
+  const docs = $("#document-list");
+  if (!docs) return;
+  if (!documents.length) {
+    docs.innerHTML = `<p class="text-sm text-muted">No imported documents yet.</p>`;
+    return;
+  }
+  docs.innerHTML = documents.slice(0, 12).map((d) => `
+    <div class="rounded-xl border border-line bg-canvas/50 px-3 py-2">
+      <div class="text-sm font-semibold text-ink truncate">${escapeHtml(d.title || "Untitled memory")}</div>
+      <div class="mt-0.5 text-xs text-muted truncate">${escapeHtml(d.source_label || sourceLabel(d.source) || "Unknown source")}</div>
+      <p class="mt-1 text-xs text-muted line-clamp-2">${escapeHtml(d.preview || "")}</p>
+    </div>`).join("");
+}
+function connectorAction(id) {
+  if (id === "mcp-agents") {
+    navTo("agents");
+    return;
+  }
+  if (["google-drive", "notion", "github", "gmail", "web-clipper"].includes(id)) {
+    modalShell(`
+      <h2 class="text-2xl font-bold text-ink">Planned connector</h2>
+      <p class="mt-2 text-base text-muted">This source is visible so you know where Keepsake is going. It will not connect or call the network until a real explicit setup flow exists.</p>
+      <div class="mt-6"><button data-close class="min-h-[48px] w-full rounded-xl border-2 border-line text-lg font-semibold text-ink hover:bg-canvas transition">Close</button></div>`)
+      .querySelector("[data-close]").addEventListener("click", (e) => e.currentTarget.closest(".fixed").remove());
+    return;
+  }
+  openImport();
+}
+
+const AGENT_CLIENTS = [
+  { id: "claude-code", title: "Claude Code" },
+  { id: "cursor", title: "Cursor" },
+  { id: "codex", title: "Codex" },
+  { id: "opencode", title: "OpenCode" },
+];
+function setupStepsForClient(client) {
+  const title = AGENT_CLIENTS.find((c) => c.id === client)?.title || "Your AI client";
+  return {
+    title: `${title} setup`,
+    steps: [
+      ["Start the local memory hub", "keepsake serve"],
+      ["Print the MCP config", "keepsake mcp-config"],
+      ["Wire this project", "keepsake connect --dir ."],
+    ],
+  };
+}
+function renderAgents() {
+  const clients = $("#agent-clients");
+  if (!clients) return;
+  clients.innerHTML = AGENT_CLIENTS.map((c) => `
+    <button data-agent-client="${c.id}" class="min-h-[104px] rounded-2xl border-2 ${ACTIVE_AGENT_CLIENT === c.id ? "border-brand-500 bg-brand-50" : "border-line bg-surface"} p-4 text-center hover:bg-canvas transition">
+      <div class="mx-auto w-10 h-10 rounded-xl bg-surface border border-line flex items-center justify-center text-sm font-bold text-ink">${escapeHtml(connectorInitial(c.title))}</div>
+      <div class="mt-3 text-sm font-semibold text-ink">${escapeHtml(c.title)}</div>
+    </button>`).join("");
+  clients.querySelectorAll("[data-agent-client]").forEach((b) => b.addEventListener("click", () => {
+    ACTIVE_AGENT_CLIENT = b.dataset.agentClient;
+    renderAgents();
+  }));
+  renderAgentSteps();
+}
+function renderAgentSteps() {
+  const setup = setupStepsForClient(ACTIVE_AGENT_CLIENT);
+  $("#agent-setup-title").textContent = setup.title;
+  const host = $("#agent-setup-steps");
+  if (!host) return;
+  host.innerHTML = setup.steps.map(([label, command], i) => `
+    <div class="grid gap-3 rounded-xl border border-line bg-canvas p-3 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-center">
+      <div class="w-8 h-8 rounded-full bg-surface border border-line flex items-center justify-center text-sm font-bold text-ink">${i + 1}</div>
+      <div>
+        <div class="text-sm font-semibold text-ink">${escapeHtml(label)}</div>
+        <code class="mt-1 block rounded-lg bg-surface border border-line px-3 py-2 text-sm text-ink overflow-x-auto">${escapeHtml(command)}</code>
+      </div>
+      <button data-copy-command="${escapeHtml(command)}" class="min-h-[40px] rounded-xl border-2 border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Copy</button>
+    </div>`).join("");
+  host.querySelectorAll("[data-copy-command]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(b.dataset.copyCommand || "");
+      b.textContent = "Copied";
+      setTimeout(() => (b.textContent = "Copy"), 900);
+    }),
+  );
+}
+async function copyAgentSetup() {
+  const setup = setupStepsForClient(ACTIVE_AGENT_CLIENT);
+  await navigator.clipboard.writeText(setup.steps.map((s) => s[1]).join("\n"));
+}
+
+async function refreshProfile() {
+  const text = $("#profile-text");
+  if (!text) return;
+  let profile = null;
+  if (DEMO || !invoke) {
+    profile = {
+      text: "# Keepsake profile\n\n- Memories sampled: 4\n- Sources: Keepsake (1), via Claude (1), via GPT (1), Unknown source (1)\n- Recent themes:\n  - Dentist appointment\n  - Berlin trip\n\nThis profile was built locally from recent memories.",
+      memory_count: DEMO_MEMORIES.length,
+      sources: [["Keepsake", 1], ["via Claude", 1], ["via GPT", 1], ["Unknown source", 1]],
+    };
+  } else {
+    try { profile = await invoke("profile_get"); } catch (_) { profile = null; }
+  }
+  if (!profile) return;
+  text.textContent = profile.text || "No profile yet. Rebuild it locally from your recent memories.";
+  $("#profile-count").textContent = `${profile.memory_count || 0} memories sampled`;
+  const src = $("#profile-sources");
+  if (src) {
+    src.innerHTML = (profile.sources || []).map(([label, count]) => `
+      <div class="flex items-center justify-between gap-3 rounded-xl border border-line bg-canvas px-3 py-2 text-sm">
+        <span class="text-ink truncate">${escapeHtml(label)}</span>
+        <span class="font-semibold text-muted">${count}</span>
+      </div>`).join("") || `<p class="text-sm text-muted">No sources yet.</p>`;
+  }
+}
+async function redistillProfile() {
+  if (DEMO || !invoke) return refreshProfile();
+  try { await invoke("profile_redistill"); } catch (_) {}
+  await refreshProfile();
+}
+async function clearProfile() {
+  if (!DEMO && invoke) {
+    try { await invoke("profile_clear"); } catch (_) {}
+  }
+  await refreshProfile();
 }
 
 async function doRemember() {
@@ -369,14 +623,16 @@ function renderHit(h) {
   const palette = TILES[hashIndex(h.id, TILES.length)];
   const icon = TRAVEL_RE.test(h.text) ? ICON_PLANE : ICON_NOTE;
   const oneLine = h.text.replace(/\s*\n\s*/g, " — ");
+  const src = sourceLabel(h.source);
   return `
     <li class="bg-surface border border-line/80 rounded-2xl px-5 py-4 flex items-center gap-4 hover:shadow-sm transition">
       <span class="w-12 h-12 rounded-xl ${palette} flex items-center justify-center shrink-0">${icon}</span>
       <div class="min-w-0 flex-1">
         <div class="text-lg font-semibold text-ink truncate">${escapeHtml(oneLine)}</div>
         <div class="mt-1.5 flex items-center gap-2">
-          <span class="inline-flex items-center gap-1.5 rounded-md bg-brand-50 px-2 py-0.5 text-sm font-medium text-brand-800">${ICON_LOCK_S} Only on your device</span>
-          ${sourceLabel(h.source) ? `<span class="text-sm text-muted">· ${escapeHtml(sourceLabel(h.source))}</span>` : ""}
+          <span class="inline-flex items-center gap-1.5 rounded-md bg-brand-50 px-2 py-0.5 text-sm font-medium text-brand-800">${ICON_LOCK_S} Memory</span>
+          <span class="text-sm text-muted">${escapeHtml(SEARCH_MODE.replace("_", " "))}</span>
+          ${src ? `<span class="text-sm text-muted">· ${escapeHtml(src)}</span>` : ""}
         </div>
       </div>
       <svg class="w-5 h-5 text-muted shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
@@ -403,7 +659,7 @@ async function doSearch() {
     ).map((m) => ({ id: m.id, text: m.text, source: m.source }));
   } else {
     try {
-      hits = await invoke("recall", { query: q, k: 8 });
+      hits = await invoke("recall_with_mode", { query: q, k: 8, mode: SEARCH_MODE });
     } catch (_) {
       hits = [];
     }
@@ -823,8 +1079,11 @@ function navTo(view) {
     s.classList.toggle("hidden", s.getAttribute("data-screen") !== view),
   );
   if (view === "suchen") setTimeout(() => $("#search-input").focus(), 30);
+  if (view === "quellen") refreshSources();
+  if (view === "agents") renderAgents();
+  if (view === "profile") refreshProfile();
   if (view === "map") buildGraph();
-  else stopGraph();
+  else if (window.__keepsakeMapReady) stopGraph();
 }
 
 // ---------- wire events ----------
@@ -855,6 +1114,32 @@ on("#lostaccess-link", "click", () => show("lostaccess"));
 on("#lostaccess-back", "click", () => show("unlock"));
 on("#startfresh-link", "click", () => show("reset"));
 on("#reset-cancel", "click", () => show("unlock"));
+on("#sources-refresh", "click", refreshSources);
+on("#agent-copy-all", "click", copyAgentSetup);
+on("#profile-redistill", "click", redistillProfile);
+on("#profile-clear", "click", clearProfile);
+
+$$(".home-action").forEach((b) =>
+  b.addEventListener("click", () => navTo(b.getAttribute("data-home-view"))),
+);
+function refreshSearchModes() {
+  $$(".search-mode").forEach((b) => {
+    const active = b.dataset.searchMode === SEARCH_MODE;
+    b.classList.toggle("bg-brand-700", active);
+    b.classList.toggle("text-white", active);
+    b.classList.toggle("border-brand-700", active);
+    b.classList.toggle("bg-surface", !active);
+    b.classList.toggle("text-ink", !active);
+  });
+}
+$$(".search-mode").forEach((b) =>
+  b.addEventListener("click", () => {
+    SEARCH_MODE = b.dataset.searchMode || "balanced";
+    refreshSearchModes();
+    if ($("#search-input").value.trim()) doSearch();
+  }),
+);
+refreshSearchModes();
 
 // Example chips on Home: tap to pre-fill the box (the user still presses Remember).
 $$(".example-chip").forEach((b) =>
@@ -1587,6 +1872,7 @@ const MAP = {
   listeners: [],
   wired: false,
 };
+window.__keepsakeMapReady = true;
 const MAP_COLORS = ["#16a34a", "#0284c7", "#d97706", "#7c3aed", "#e11d48", "#0d9488", "#ca8a04", "#db2777"];
 const MAP_STOP = new Set("the a an and or but of to in on for with my your our at is are was were be been i it this that these those as by from has have had do does did so we you they he she them his her their its not no yes if then than".split(" "));
 

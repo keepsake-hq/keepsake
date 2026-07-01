@@ -3005,6 +3005,7 @@ dependencies = [
  "hex",
  "keepsake-core",
  "keepsake-crypto",
+ "keepsake-import",
  "keepsake-retrieval",
  "keepsake-store-sqlite",
  "keepsake-vault",

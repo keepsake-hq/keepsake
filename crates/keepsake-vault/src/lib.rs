@@ -9,11 +9,11 @@
 use keepsake_core::ledger::ContradictionLedger;
 use keepsake_core::CellId;
 use keepsake_crypto::Kek;
-use std::collections::HashSet;
 use keepsake_graph::GraphIndex;
 pub use keepsake_graph::{parse_triples, Triple};
 use keepsake_retrieval::{Embedder, VectorIndex};
 use keepsake_store_sqlite::{SqliteVault, StoreError};
+use std::collections::HashSet;
 
 /// SAIHM sharing-contract kinds: TEMPORARY (≤24h), PERMANENT, SYNDICATE (multi-party).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +114,8 @@ pub enum RecallProfile {
     Recent,
     /// Balanced ranking, then also pulls in memories the knowledge graph connects to the query.
     GraphFirst,
+    /// User-facing hybrid mode: semantic + recency + graph enrichment, all local.
+    Hybrid,
 }
 
 impl RecallProfile {
@@ -123,6 +125,7 @@ impl RecallProfile {
             "semantic" => RecallProfile::Semantic,
             "recent" => RecallProfile::Recent,
             "graph" | "graph_first" | "graph-first" | "graphfirst" => RecallProfile::GraphFirst,
+            "hybrid" => RecallProfile::Hybrid,
             _ => RecallProfile::Balanced,
         }
     }
@@ -140,7 +143,9 @@ impl RecallProfile {
                 half_life_secs: 14.0 * 24.0 * 60.0 * 60.0,
                 floor: 0.1,
             },
-            RecallProfile::Balanced | RecallProfile::GraphFirst => RecencyParams::default(),
+            RecallProfile::Balanced | RecallProfile::GraphFirst | RecallProfile::Hybrid => {
+                RecencyParams::default()
+            }
         }
     }
 }
@@ -249,6 +254,11 @@ impl<E: Embedder> MemoryVault<E> {
     /// Store the distilled profile.
     pub fn set_profile(&self, text: &str) -> Result<(), StoreError> {
         self.store.set_profile(text)
+    }
+
+    /// Clear the distilled profile. Memories remain intact; the summary can be rebuilt locally.
+    pub fn clear_profile(&self) -> Result<(), StoreError> {
+        self.store.clear_profile()
     }
 
     /// Store `text` as an encrypted cell and index its embedding. Returns the id.
@@ -554,7 +564,7 @@ impl<E: Embedder> MemoryVault<E> {
         profile: RecallProfile,
     ) -> Result<Vec<(CellId, String)>, StoreError> {
         match profile {
-            RecallProfile::GraphFirst => {
+            RecallProfile::GraphFirst | RecallProfile::Hybrid => {
                 self.recall_with_graph(kek, query, k, now, profile.recency())
             }
             _ => self.recall_ranked(kek, query, k, now, profile.recency()),
@@ -676,7 +686,12 @@ impl<E: Embedder> MemoryVault<E> {
         let mut all: Vec<(usize, usize, f32)> = Vec::new();
         for i in 0..entries.len() {
             for j in (i + 1)..entries.len() {
-                let sim: f32 = entries[i].1.iter().zip(&entries[j].1).map(|(a, b)| a * b).sum();
+                let sim: f32 = entries[i]
+                    .1
+                    .iter()
+                    .zip(&entries[j].1)
+                    .map(|(a, b)| a * b)
+                    .sum();
                 if sim >= threshold {
                     all.push((i, j, sim));
                 }
@@ -857,13 +872,19 @@ mod tests {
     #[test]
     fn recency_weight_decays_to_floor_not_zero() {
         let p = RecencyParams::default();
-        assert!((p.weight(0.0) - 1.0).abs() < 1e-6, "fresh memory keeps full weight");
+        assert!(
+            (p.weight(0.0) - 1.0).abs() < 1e-6,
+            "fresh memory keeps full weight"
+        );
         assert!(
             (p.weight(p.half_life_secs) - 0.75).abs() < 1e-3,
             "one half-life ≈ floor + half of the remainder (0.5 + 0.25)"
         );
         assert!(p.weight(1e12) >= p.floor, "never decays below the floor");
-        assert!(p.weight(1e12) < 0.51, "but approaches the floor for ancient memories");
+        assert!(
+            p.weight(1e12) < 0.51,
+            "but approaches the floor for ancient memories"
+        );
     }
 
     #[test]
@@ -893,6 +914,7 @@ mod tests {
         assert_eq!(RecallProfile::parse("semantic"), Semantic);
         assert_eq!(RecallProfile::parse("RECENT"), Recent);
         assert_eq!(RecallProfile::parse("graph_first"), GraphFirst);
+        assert_eq!(RecallProfile::parse("hybrid"), Hybrid);
         assert_eq!(RecallProfile::parse(""), Balanced);
         assert_eq!(RecallProfile::parse("nonsense"), Balanced);
 
@@ -926,7 +948,35 @@ mod tests {
         let graph = vault
             .recall_with_profile(&kek, "alpha alpha alpha", 2, now, RecallProfile::GraphFirst)
             .unwrap();
-        assert!(graph.len() >= 2, "GraphFirst returns at least the vector hits");
+        assert!(
+            graph.len() >= 2,
+            "GraphFirst returns at least the vector hits"
+        );
+
+        let hybrid = vault
+            .recall_with_profile(&kek, "alpha alpha alpha", 2, now, RecallProfile::Hybrid)
+            .unwrap();
+        assert_eq!(
+            hybrid, graph,
+            "Hybrid is the user-facing graph-enriched mode"
+        );
+    }
+
+    #[test]
+    fn clear_profile_removes_the_derived_summary_without_touching_memories() {
+        let kek = test_kek();
+        let mut vault = memory_vault();
+        vault
+            .remember_at(&kek, "Berlin dentist Monday", 100)
+            .unwrap();
+        vault
+            .set_profile("The user likes local-first tools.")
+            .unwrap();
+
+        vault.clear_profile().unwrap();
+
+        assert_eq!(vault.profile().unwrap(), None);
+        assert_eq!(vault.count().unwrap(), 1);
     }
 
     #[test]
@@ -973,7 +1023,10 @@ mod tests {
             .map(|(id, _)| id)
             .collect();
         assert!(ids.contains(&rs), "the current fact surfaces");
-        assert!(!ids.contains(&py), "the superseded fact is hidden from recall");
+        assert!(
+            !ids.contains(&py),
+            "the superseded fact is hidden from recall"
+        );
     }
 
     #[test]
@@ -982,9 +1035,14 @@ mod tests {
         let mut vault = memory_vault();
         let now = 1_700_000_000i64;
         let (a, first) = vault.remember_fact(&kek, "home", "Vienna", now).unwrap();
-        let (b, second) = vault.remember_fact(&kek, "home", "Vienna", now + 10).unwrap();
+        let (b, second) = vault
+            .remember_fact(&kek, "home", "Vienna", now + 10)
+            .unwrap();
         assert!(first, "first record stores");
-        assert!(!second, "the same value again does not create a second cell");
+        assert!(
+            !second,
+            "the same value again does not create a second cell"
+        );
         assert_eq!(a, b);
         assert_eq!(vault.count().unwrap(), 1);
     }
@@ -995,8 +1053,12 @@ mod tests {
         let mut vault = memory_vault();
         let now = 1_700_000_000i64;
         // X names Apollo directly; W's text does not, but a triple links W to Apollo.
-        let x = vault.remember_at(&kek, "Apollo launches on March 14", now).unwrap();
-        let w = vault.remember_at(&kek, "the keynote slot is confirmed", now).unwrap();
+        let x = vault
+            .remember_at(&kek, "Apollo launches on March 14", now)
+            .unwrap();
+        let w = vault
+            .remember_at(&kek, "the keynote slot is confirmed", now)
+            .unwrap();
         vault
             .add_triples(&x, &[Triple::new("Apollo", "launches_on", "March 14")], now)
             .unwrap();
@@ -1032,7 +1094,11 @@ mod tests {
         let text = "Apollo is our secret flagship, launching on March 14";
         let cell = vault.remember(&kek, text).unwrap();
         vault
-            .add_triples(&cell, &[Triple::new("Apollo", "launches_on", "March 14")], now)
+            .add_triples(
+                &cell,
+                &[Triple::new("Apollo", "launches_on", "March 14")],
+                now,
+            )
             .unwrap();
 
         // The map shows STRUCTURE (triples + the backing id), not the full memory prose.
@@ -1111,15 +1177,25 @@ mod tests {
     fn memory_graph_has_one_node_per_memory_and_filters_edges_by_threshold() {
         let kek = test_kek();
         let mut vault = memory_vault();
-        vault.remember_at(&kek, "berlin trip on friday", 100).unwrap();
-        vault.remember_at(&kek, "berlin flight friday morning", 110).unwrap();
+        vault
+            .remember_at(&kek, "berlin trip on friday", 100)
+            .unwrap();
+        vault
+            .remember_at(&kek, "berlin flight friday morning", 110)
+            .unwrap();
         vault.remember_at(&kek, "buy milk and eggs", 120).unwrap();
 
         let g = vault.memory_graph(&kek, 0.0, 8, 3000).unwrap();
         assert_eq!(g.nodes.len(), 3, "one node per memory");
-        assert!(g.nodes.iter().all(|n| !n.title.is_empty()), "every node has a title");
+        assert!(
+            g.nodes.iter().all(|n| !n.title.is_empty()),
+            "every node has a title"
+        );
         for e in &g.edges {
-            assert!(e.a < g.nodes.len() && e.b < g.nodes.len() && e.a != e.b, "valid endpoints");
+            assert!(
+                e.a < g.nodes.len() && e.b < g.nodes.len() && e.a != e.b,
+                "valid endpoints"
+            );
             assert!(e.weight >= 0.0, "kept edges meet the threshold");
         }
 
@@ -1181,12 +1257,18 @@ mod tests {
     fn remember_deduped_skips_near_duplicates() {
         let kek = test_kek();
         let mut vault = memory_vault();
-        let (_, stored) = vault.remember_deduped(&kek, "alpha alpha alpha", 0.95).unwrap();
+        let (_, stored) = vault
+            .remember_deduped(&kek, "alpha alpha alpha", 0.95)
+            .unwrap();
         assert!(stored, "the first write stores");
-        let (_, dup) = vault.remember_deduped(&kek, "alpha alpha alpha", 0.95).unwrap();
+        let (_, dup) = vault
+            .remember_deduped(&kek, "alpha alpha alpha", 0.95)
+            .unwrap();
         assert!(!dup, "an identical memory is not stored twice");
         assert_eq!(vault.count().unwrap(), 1, "no duplicate cell created");
-        let (_, fresh) = vault.remember_deduped(&kek, "zulu zulu zulu", 0.95).unwrap();
+        let (_, fresh) = vault
+            .remember_deduped(&kek, "zulu zulu zulu", 0.95)
+            .unwrap();
         assert!(fresh, "a clearly different memory is stored");
         assert_eq!(vault.count().unwrap(), 2);
     }
