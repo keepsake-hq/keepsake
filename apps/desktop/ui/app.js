@@ -51,14 +51,6 @@ $$(".theme-btn").forEach((b) =>
 );
 refreshThemeButtons();
 
-// Soft tile palettes (literal strings so Tailwind's scanner keeps them).
-const TILES = [
-  "bg-brand-50 text-brand-600",
-  "bg-amber-50 text-amber-600",
-  "bg-sky-50 text-sky-600",
-  "bg-violet-50 text-violet-600",
-  "bg-rose-50 text-rose-600",
-];
 const ICON_NOTE =
   '<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>';
 const ICON_LOCK_S =
@@ -72,6 +64,7 @@ const TRAVEL_RE = /\b(flight|fly|flying|travel|trip|berlin|hotel|airport|vacatio
 let SETTINGS_COUNT = 0;
 let SEARCH_MODE = "balanced";
 let ACTIVE_AGENT_CLIENT = "codex";
+let SELECTED_HOME_MEMORY_ID = null;
 
 const AUTH_SCREENS = ["onboarding", "unlock", "lostaccess", "reset"];
 function show(id) {
@@ -98,12 +91,6 @@ function hideLoading() {
 }
 
 // ---------- timeline / cards ----------
-function hashIndex(str, mod) {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
-  return h % mod;
-}
-
 function fmtTime(ts) {
   return new Date(ts * 1000).toLocaleTimeString("en-US", {
     hour: "2-digit",
@@ -127,7 +114,7 @@ function dateLabel(ts) {
   return full;
 }
 
-function cardHtml(mem, palette) {
+function cardHtml(mem) {
   const text = mem.text || "";
   const nl = text.indexOf("\n");
   const title = (nl === -1 ? text : text.slice(0, nl)).trim() || "(empty)";
@@ -135,22 +122,18 @@ function cardHtml(mem, palette) {
   const icon = TRAVEL_RE.test(text) ? ICON_PLANE : ICON_NOTE;
   const src = sourceLabel(mem.source);
   return `
-    <div data-card="${mem.id}" data-text="${escapeHtml(title)}" class="group bg-surface border border-line/80 rounded-2xl px-4 py-3.5 flex items-start gap-3.5 hover:shadow-sm transition">
-      <span class="w-10 h-10 rounded-xl ${palette} flex items-center justify-center shrink-0">${icon}</span>
+    <div data-card="${mem.id}" data-text="${escapeHtml(title)}" class="memory-table-row row-surface group px-4 py-3 flex items-center gap-3 cursor-pointer">
+      <span class="icon-cell w-10 h-10 rounded-xl flex items-center justify-center shrink-0">${icon}</span>
       <div class="min-w-0 flex-1">
-        <div class="flex items-start justify-between gap-3">
-          <div class="font-medium text-ink text-[15px] truncate">${escapeHtml(title)}</div>
-          <div class="flex items-center gap-2 shrink-0">
-            <span class="text-xs text-muted tabular-nums">${fmtTime(mem.created_at)}</span>
-            <button data-forget="${mem.id}" aria-label="Remove this memory" class="shrink-0 inline-flex items-center justify-center w-11 h-11 -mr-1 rounded-xl text-muted hover:bg-red-50 hover:text-red-600 transition">${ICON_TRASH}</button>
-          </div>
-        </div>
-        ${desc ? `<div class="text-sm text-muted mt-0.5 line-clamp-2">${escapeHtml(desc)}</div>` : ""}
-        <div class="mt-2 flex items-center gap-2.5 text-xs text-muted">
-          <span class="inline-flex items-center gap-1.5">${ICON_LOCK_S} End-to-end encrypted</span>
-          ${src ? `<span class="text-muted">·</span><span>${escapeHtml(src)}</span>` : ""}
+        <div class="font-medium text-ink text-[14px] truncate">${escapeHtml(title)}</div>
+        <div class="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+          ${desc ? `<span class="truncate max-w-[18rem]">${escapeHtml(desc)}</span><span>·</span>` : ""}
+          <span>${src ? escapeHtml(src) : "added here"}</span>
         </div>
       </div>
+      <span class="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-muted">${ICON_LOCK_S} encrypted</span>
+      <span class="text-xs text-muted tabular-nums shrink-0">${fmtTime(mem.created_at)}</span>
+      <button data-forget="${mem.id}" aria-label="Remove this memory" class="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-lg text-muted hover:bg-red-50 hover:text-red-600 transition">${ICON_TRASH}</button>
     </div>`;
 }
 
@@ -214,7 +197,16 @@ function renderTimeline(memories) {
   $("#start-empty").classList.toggle("hidden", has);
   const rh = $("#recent-header");
   if (rh) rh.classList.toggle("hidden", !has);
-  $("#start-count").textContent = has ? countLabel(SETTINGS_COUNT) : "";
+  const startCount = $("#start-count");
+  if (startCount) startCount.textContent = has ? countLabel(SETTINGS_COUNT) : "";
+  if (!has) {
+    el.innerHTML = "";
+    renderHomeDetail(null);
+    return;
+  }
+  if (!SELECTED_HOME_MEMORY_ID || !memories.some((m) => m.id === SELECTED_HOME_MEMORY_ID)) {
+    SELECTED_HOME_MEMORY_ID = memories[0].id;
+  }
   const groups = [];
   for (const m of memories) {
     const label = dateLabel(m.created_at);
@@ -225,36 +217,85 @@ function renderTimeline(memories) {
   el.innerHTML = groups
     .map((g, gi) => {
       const isToday = g.label.startsWith("Today");
-      const cards = g.items
-        .map(
-          (m) => `
-        <div class="relative">
-          <span class="absolute -left-[1.6rem] top-5 w-2.5 h-2.5 rounded-full ${isToday ? "bg-brand-500" : "bg-line"} ring-4 ring-canvas"></span>
-          ${cardHtml(m, TILES[hashIndex(m.id, TILES.length)])}
-        </div>`,
-        )
+      const rows = g.items
+        .map((m) => cardHtml(m))
         .join("");
       return `
-      <div class="${gi > 0 ? "mt-6" : ""}">
-        <div class="text-sm font-semibold ${isToday ? "text-brand-600" : "text-ink"} mb-3">${g.label}</div>
-        <div class="relative border-l border-line pl-6 space-y-3">${cards}</div>
+      <div class="${gi > 0 ? "border-t border-line" : ""}">
+        <div class="px-4 ${gi > 0 ? "pt-4" : "pt-3"} pb-2 text-xs font-semibold ${isToday ? "text-brand-700" : "text-muted"}">${g.label}</div>
+        <div>${rows}</div>
       </div>`;
     })
     .join("");
-  el.querySelectorAll("[data-forget]").forEach((b) =>
-    b.addEventListener("click", () => doForget(b.getAttribute("data-forget"))),
-  );
+  wireMemoryRows(el, memories);
+  renderHomeDetail(memories.find((m) => m.id === SELECTED_HOME_MEMORY_ID) || memories[0]);
 }
 
 function renderAll(memories) {
   const el = $("#all-list");
   $("#all-empty").classList.toggle("hidden", memories.length > 0);
-  el.innerHTML = memories
-    .map((m) => cardHtml(m, TILES[hashIndex(m.id, TILES.length)]))
-    .join("");
-  el.querySelectorAll("[data-forget]").forEach((b) =>
-    b.addEventListener("click", () => doForget(b.getAttribute("data-forget"))),
+  el.classList.toggle("memory-table", memories.length > 0);
+  el.classList.toggle("rounded-2xl", memories.length > 0);
+  el.innerHTML = memories.map((m) => cardHtml(m)).join("");
+  wireMemoryRows(el, memories);
+}
+
+function wireMemoryRows(host, memories) {
+  host.querySelectorAll("[data-forget]").forEach((b) =>
+    b.addEventListener("click", (event) => {
+      event.stopPropagation();
+      doForget(b.getAttribute("data-forget"));
+    }),
   );
+  host.querySelectorAll("[data-card]").forEach((row) =>
+    row.addEventListener("click", () => {
+      SELECTED_HOME_MEMORY_ID = row.dataset.card;
+      renderHomeDetail(memories.find((m) => m.id === SELECTED_HOME_MEMORY_ID) || null);
+    }),
+  );
+}
+
+function renderHomeDetail(mem) {
+  const host = $("#home-detail");
+  if (!host) return;
+  if (!mem) {
+    host.innerHTML = `
+      <div class="text-sm text-muted">Select a memory to see source, type, and related context.</div>`;
+    return;
+  }
+  const title = (mem.text || "").split("\n").find((line) => line.trim()) || "Untitled memory";
+  const src = sourceLabel(mem.source) || "added here";
+  const created = new Date(mem.created_at * 1000).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const related = (DEMO_MEMORIES || [])
+    .filter((m) => m.id !== mem.id)
+    .slice(0, 3);
+  host.innerHTML = `
+    <div class="inline-flex items-center gap-2 rounded-lg bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-700">Preference</div>
+    <h3 class="mt-5 text-lg font-semibold leading-snug text-ink">${escapeHtml(title.trim())}</h3>
+    <p class="mt-2 text-sm text-muted">${escapeHtml((mem.text || "").replace(/\s*\n\s*/g, " ").slice(0, 180))}</p>
+    <div class="mt-6 border-t border-line pt-5">
+      <h4 class="text-sm font-semibold text-ink">About this memory</h4>
+      <dl class="mt-4 space-y-3 text-sm">
+        <div class="flex justify-between gap-4"><dt class="text-muted">Source</dt><dd class="text-ink text-right">${escapeHtml(src)}</dd></div>
+        <div class="flex justify-between gap-4"><dt class="text-muted">Created</dt><dd class="text-ink text-right">${escapeHtml(created)}</dd></div>
+        <div class="flex justify-between gap-4"><dt class="text-muted">Access count</dt><dd class="text-ink text-right">1</dd></div>
+        <div class="flex justify-between gap-4"><dt class="text-muted">Memory ID</dt><dd class="text-ink text-right">${escapeHtml(mem.id.slice(0, 10))}…</dd></div>
+      </dl>
+    </div>
+    <div class="mt-6 border-t border-line pt-5">
+      <h4 class="text-sm font-semibold text-ink">Related memories</h4>
+      <div class="mt-3 space-y-2">
+        ${related
+          .map((m) => `<div class="flex items-start justify-between gap-3 text-sm"><span class="text-muted">${escapeHtml((m.text || "").split("\n")[0].slice(0, 44))}</span><span class="text-xs text-soft">${escapeHtml(dateLabel(m.created_at).replace(/, 2026$/, ""))}</span></div>`)
+          .join("") || `<div class="text-sm text-muted">No related memories yet.</div>`}
+      </div>
+    </div>`;
 }
 
 // ---------- data ----------
@@ -358,29 +399,31 @@ async function refreshSources() {
 }
 
 function renderConnectorCard(c) {
+  const count = c.memory_count ? `${c.memory_count} ${c.memory_count === 1 ? "memory" : "memories"}` : c.network ? "Needs explicit connect" : "Ready";
   return `
-    <div class="rounded-2xl border-2 border-line bg-surface p-5">
-      <div class="flex items-start justify-between gap-3">
-        <div class="w-11 h-11 rounded-xl bg-canvas border border-line flex items-center justify-center text-sm font-bold text-ink">${escapeHtml(connectorInitial(c.title))}</div>
-        <span class="inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusClass(c.status)}">${statusLabel(c.status)}</span>
+    <button data-connector-action="${escapeHtml(c.id)}" class="memory-table-row row-surface w-full px-4 py-3 text-left">
+      <div class="flex items-center gap-3">
+        <span class="icon-cell w-10 h-10 rounded-xl flex items-center justify-center text-xs font-semibold shrink-0">${escapeHtml(connectorInitial(c.title))}</span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-sm font-semibold text-ink truncate">${escapeHtml(c.title)}</span>
+          <span class="block text-xs text-muted truncate">${escapeHtml(c.description)}</span>
+        </span>
+        <span class="hidden md:block text-xs text-muted">${escapeHtml(count)}</span>
+        <span class="inline-flex rounded-md border px-2.5 py-1 text-xs font-semibold ${statusClass(c.status)}">${statusLabel(c.status)}</span>
       </div>
-      <h3 class="mt-4 text-lg font-semibold text-ink">${escapeHtml(c.title)}</h3>
-      <p class="mt-1 text-sm text-muted leading-relaxed">${escapeHtml(c.description)}</p>
-      <p class="mt-3 text-xs text-muted">${escapeHtml(c.privacy_note)}</p>
-      <button data-connector-action="${escapeHtml(c.id)}" class="mt-4 min-h-[44px] w-full rounded-xl ${c.status === "planned" ? "border-2 border-line text-muted" : "bg-brand-700 text-white hover:bg-brand-800"} text-sm font-semibold transition">${escapeHtml(c.primary_action)}</button>
-    </div>`;
+    </button>`;
 }
 function renderConnectorRow(c) {
   const count = c.memory_count ? `${c.memory_count} ${c.memory_count === 1 ? "memory" : "memories"}` : c.network ? "Needs explicit connect" : "Ready";
   return `
-    <button data-connector-action="${escapeHtml(c.id)}" class="w-full rounded-2xl border border-line bg-surface px-4 py-3 text-left hover:bg-canvas transition">
+    <button data-connector-action="${escapeHtml(c.id)}" class="memory-table-row row-surface w-full px-4 py-3 text-left">
       <div class="flex items-center gap-3">
-        <span class="w-10 h-10 rounded-xl bg-canvas border border-line flex items-center justify-center text-xs font-bold text-ink">${escapeHtml(connectorInitial(c.title))}</span>
+        <span class="icon-cell w-10 h-10 rounded-xl flex items-center justify-center text-xs font-semibold shrink-0">${escapeHtml(connectorInitial(c.title))}</span>
         <span class="min-w-0 flex-1">
           <span class="block text-sm font-semibold text-ink truncate">${escapeHtml(c.title)}</span>
           <span class="block text-xs text-muted truncate">${escapeHtml(c.category)} · ${escapeHtml(count)}</span>
         </span>
-        <span class="inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusClass(c.status)}">${statusLabel(c.status)}</span>
+        <span class="inline-flex rounded-md border px-2.5 py-1 text-xs font-semibold ${statusClass(c.status)}">${statusLabel(c.status)}</span>
       </div>
     </button>`;
 }
@@ -392,7 +435,7 @@ function renderDocuments(documents) {
     return;
   }
   docs.innerHTML = documents.slice(0, 12).map((d) => `
-    <div class="rounded-xl border border-line bg-canvas/50 px-3 py-2">
+    <div class="rounded-lg border border-line bg-canvas/50 px-3 py-2">
       <div class="text-sm font-semibold text-ink truncate">${escapeHtml(d.title || "Untitled memory")}</div>
       <div class="mt-0.5 text-xs text-muted truncate">${escapeHtml(d.source_label || sourceLabel(d.source) || "Unknown source")}</div>
       <p class="mt-1 text-xs text-muted line-clamp-2">${escapeHtml(d.preview || "")}</p>
@@ -435,9 +478,9 @@ function renderAgents() {
   const clients = $("#agent-clients");
   if (!clients) return;
   clients.innerHTML = AGENT_CLIENTS.map((c) => `
-    <button data-agent-client="${c.id}" class="min-h-[104px] rounded-2xl border-2 ${ACTIVE_AGENT_CLIENT === c.id ? "border-brand-500 bg-brand-50" : "border-line bg-surface"} p-4 text-center hover:bg-canvas transition">
-      <div class="mx-auto w-10 h-10 rounded-xl bg-surface border border-line flex items-center justify-center text-sm font-bold text-ink">${escapeHtml(connectorInitial(c.title))}</div>
-      <div class="mt-3 text-sm font-semibold text-ink">${escapeHtml(c.title)}</div>
+    <button data-agent-client="${c.id}" class="min-h-[84px] rounded-xl border ${ACTIVE_AGENT_CLIENT === c.id ? "border-brand-300 bg-brand-50 text-brand-800" : "border-line bg-surface text-ink"} p-4 text-left hover:bg-canvas transition">
+      <div class="text-xs text-muted">${escapeHtml(connectorInitial(c.title))}</div>
+      <div class="mt-2 text-sm font-semibold">${escapeHtml(c.title)}</div>
     </button>`).join("");
   clients.querySelectorAll("[data-agent-client]").forEach((b) => b.addEventListener("click", () => {
     ACTIVE_AGENT_CLIENT = b.dataset.agentClient;
@@ -451,13 +494,13 @@ function renderAgentSteps() {
   const host = $("#agent-setup-steps");
   if (!host) return;
   host.innerHTML = setup.steps.map(([label, command], i) => `
-    <div class="grid gap-3 rounded-xl border border-line bg-canvas p-3 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-center">
-      <div class="w-8 h-8 rounded-full bg-surface border border-line flex items-center justify-center text-sm font-bold text-ink">${i + 1}</div>
+    <div class="grid gap-3 rounded-xl border border-line bg-canvas/70 p-3 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-center">
+      <div class="w-8 h-8 rounded-lg bg-surface border border-line flex items-center justify-center text-sm font-semibold text-ink">${i + 1}</div>
       <div>
         <div class="text-sm font-semibold text-ink">${escapeHtml(label)}</div>
         <code class="mt-1 block rounded-lg bg-surface border border-line px-3 py-2 text-sm text-ink overflow-x-auto">${escapeHtml(command)}</code>
       </div>
-      <button data-copy-command="${escapeHtml(command)}" class="min-h-[40px] rounded-xl border-2 border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Copy</button>
+      <button data-copy-command="${escapeHtml(command)}" class="min-h-[40px] rounded-lg border border-line bg-surface px-3 text-sm font-medium text-ink hover:bg-canvas transition">Copy</button>
     </div>`).join("");
   host.querySelectorAll("[data-copy-command]").forEach((b) =>
     b.addEventListener("click", async () => {
@@ -620,19 +663,18 @@ function showUndoToast(id, text) {
 }
 
 function renderHit(h) {
-  const palette = TILES[hashIndex(h.id, TILES.length)];
   const icon = TRAVEL_RE.test(h.text) ? ICON_PLANE : ICON_NOTE;
   const oneLine = h.text.replace(/\s*\n\s*/g, " — ");
   const src = sourceLabel(h.source);
   return `
-    <li class="bg-surface border border-line/80 rounded-2xl px-5 py-4 flex items-center gap-4 hover:shadow-sm transition">
-      <span class="w-12 h-12 rounded-xl ${palette} flex items-center justify-center shrink-0">${icon}</span>
+    <li class="row-surface rounded-xl px-4 py-3 flex items-center gap-3">
+      <span class="icon-cell w-10 h-10 rounded-xl flex items-center justify-center shrink-0">${icon}</span>
       <div class="min-w-0 flex-1">
-        <div class="text-lg font-semibold text-ink truncate">${escapeHtml(oneLine)}</div>
-        <div class="mt-1.5 flex items-center gap-2">
-          <span class="inline-flex items-center gap-1.5 rounded-md bg-brand-50 px-2 py-0.5 text-sm font-medium text-brand-800">${ICON_LOCK_S} Memory</span>
-          <span class="text-sm text-muted">${escapeHtml(SEARCH_MODE.replace("_", " "))}</span>
-          ${src ? `<span class="text-sm text-muted">· ${escapeHtml(src)}</span>` : ""}
+        <div class="text-sm font-medium text-ink truncate">${escapeHtml(oneLine)}</div>
+        <div class="mt-1 flex items-center gap-2 text-xs text-muted">
+          <span class="inline-flex items-center gap-1.5">${ICON_LOCK_S} Memory</span>
+          <span>${escapeHtml(SEARCH_MODE.replace("_", " "))}</span>
+          ${src ? `<span>· ${escapeHtml(src)}</span>` : ""}
         </div>
       </div>
       <svg class="w-5 h-5 text-muted shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
@@ -773,7 +815,7 @@ function setupVerify(words) {
         box.querySelectorAll(".verify-opt").forEach((x) => (x.disabled = true));
         b.classList.add("border-brand-500", "bg-brand-50", "text-brand-800");
         if (msg) {
-          msg.textContent = "✓ Perfect. Your key is saved correctly.";
+          msg.textContent = "Your key is saved correctly.";
           msg.className = "mt-3 text-center text-base font-medium text-brand-700";
           msg.classList.remove("hidden");
         }
@@ -1119,7 +1161,7 @@ on("#agent-copy-all", "click", copyAgentSetup);
 on("#profile-redistill", "click", redistillProfile);
 on("#profile-clear", "click", clearProfile);
 
-$$(".home-action").forEach((b) =>
+$$("[data-home-view]").forEach((b) =>
   b.addEventListener("click", () => navTo(b.getAttribute("data-home-view"))),
 );
 function refreshSearchModes() {
@@ -1206,7 +1248,7 @@ on("#seed-copy", "click", async () => {
     await navigator.clipboard.writeText(phrase);
     const l = $("#seed-copy-label");
     if (l) {
-      l.textContent = "Copied ✓";
+      l.textContent = "Copied";
       setTimeout(() => (l.textContent = "Copy the words"), 2000);
     }
   } catch (_) {}
@@ -1312,7 +1354,7 @@ function showRecoveryPieces(names, pieces) {
     b.addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(pieces[+b.dataset.i]);
-        b.textContent = "Copied ✓";
+        b.textContent = "Copied";
         setTimeout(() => (b.textContent = "Copy"), 1500);
       } catch (_) {}
     }),

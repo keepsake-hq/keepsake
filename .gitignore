@@ -20,3 +20,6 @@ Cargo.lock.bak
 
 # local dev / preview config (contains absolute machine paths)
 .claude/
+
+# Local browser-check artifacts
+.playwright-cli/

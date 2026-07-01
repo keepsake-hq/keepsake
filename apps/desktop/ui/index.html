@@ -19,14 +19,14 @@
           <span class="text-2xl font-bold tracking-tight text-ink">keepsake</span>
         </div>
         <div class="flex-1 flex items-center justify-center px-6 py-6">
-          <div class="w-full max-w-3xl bg-surface border border-line/80 rounded-3xl shadow-sm p-8 sm:p-10">
+          <div class="w-full max-w-3xl pane rounded-2xl p-8 sm:p-10">
             <div class="text-center">
               <div class="mx-auto mb-4 w-14 h-14 rounded-2xl bg-amber-50 flex items-center justify-center">
                 <svg class="w-7 h-7 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.5 12.5 7-7"/><path d="m18 4 2 2"/><path d="m15 7 2 2"/></svg>
               </div>
               <h1 class="text-3xl font-bold tracking-tight text-ink">Here is your key</h1>
               <p class="mt-3 text-xl text-muted max-w-xl mx-auto">These 24 words are the <span class="font-semibold text-ink">only</span> way to open your memories. No one — not even us — can open it for you or send you new words.</p>
-              <p class="mt-3 text-base font-medium text-amber-700">⚠ Make sure no one is looking over your shoulder.</p>
+              <p class="mt-3 text-base font-medium text-amber-700">Make sure no one is looking over your shoulder.</p>
             </div>
 
             <div id="seed-grid" class="mt-7 grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
@@ -74,7 +74,7 @@
             <p id="unlock-subtitle" class="mt-3 text-xl text-muted">Welcome back. Type your 24 words to open your memories.</p>
           </div>
           <!-- Quick unlock (PIN) — shown only when set up on this device; reachable before the 24 words -->
-          <div id="qu-panel" class="hidden bg-surface border border-line/80 rounded-3xl shadow-sm p-6 mb-4">
+          <div id="qu-panel" class="hidden pane rounded-2xl p-6 mb-4">
             <label class="text-lg font-semibold text-ink block mb-1">Enter your PIN</label>
             <p class="text-base text-muted mb-3">Open Keepsake without typing all 24 words.</p>
             <input id="qu-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Your PIN"
@@ -87,7 +87,7 @@
             <button id="qu-use-words" class="mt-5 w-full text-center text-base font-medium text-brand-700 hover:text-brand-800 underline underline-offset-2">Use my 24 words instead</button>
           </div>
 
-          <div id="seed-card" class="bg-surface border border-line/80 rounded-3xl shadow-sm p-6">
+          <div id="seed-card" class="pane rounded-2xl p-6">
             <div class="flex items-center justify-between mb-3">
               <label class="text-lg font-semibold text-ink">Your 24 words</label>
               <button id="seed-paste" class="text-base font-medium text-brand-700 hover:text-brand-800 transition">Paste all</button>
@@ -117,15 +117,15 @@
             <p class="mt-3 text-xl text-muted">Pick what's true for you.</p>
           </div>
           <div class="space-y-3">
-            <div class="rounded-2xl border-2 border-line bg-surface p-5">
+            <div class="pane rounded-2xl p-5">
               <div class="text-lg font-semibold text-ink">I have Keepsake on another device</div>
               <p class="mt-1 text-base text-muted">If your phone or other computer still opens, you can read your 24 words there — under Settings — and type them here.</p>
             </div>
-            <button id="recovery-use-link" class="block w-full text-left rounded-2xl border-2 border-line bg-surface p-5 hover:border-line hover:bg-canvas transition">
+            <button id="recovery-use-link" class="block w-full text-left pane rounded-2xl p-5 hover:bg-canvas transition">
               <div class="text-lg font-semibold text-ink">I gave backup copies to people I trust</div>
               <p class="mt-1 text-base text-muted">Ask two of them for the piece you gave them, and put your memories back together here.</p>
             </button>
-            <button id="startfresh-link" class="block w-full text-left rounded-2xl border-2 border-line bg-surface p-5 hover:border-line hover:bg-canvas transition">
+            <button id="startfresh-link" class="block w-full text-left pane rounded-2xl p-5 hover:bg-canvas transition">
               <div class="text-lg font-semibold text-ink">I don't have any of these</div>
               <p class="mt-1 text-base text-muted">Start fresh with a new, empty Keepsake. Your old memories stay locked away — only your 24 words can ever open them.</p>
             </button>
@@ -137,7 +137,7 @@
       <!-- Start fresh: gentle, gated, never destroys -->
       <main id="reset" class="hidden min-h-screen flex items-center justify-center px-6 py-10">
         <div class="w-full max-w-lg">
-          <div class="bg-surface border-2 border-line rounded-3xl shadow-sm p-8">
+          <div class="pane rounded-2xl p-8">
             <h1 class="text-3xl font-bold tracking-tight text-ink">Start fresh?</h1>
             <p class="mt-4 text-lg text-ink">This makes a brand-new, empty Keepsake on this computer. Your old memories will not appear here.</p>
             <div class="mt-4 rounded-xl bg-brand-500/10 border border-brand-500/20 p-4 text-base text-ink">
@@ -170,11 +170,12 @@
     </div>
 
     <!-- ===================== SHELL (unlocked) ===================== -->
-    <div id="shell" class="hidden h-screen flex">
+    <div id="shell" class="hidden h-screen flex app-window">
       <!-- Sidebar -->
-      <aside class="w-64 shrink-0 bg-sidebar border-r border-line/70 flex flex-col px-4 pt-10 pb-6">
+      <aside class="w-64 shrink-0 bg-sidebar/90 border-r border-line/70 flex flex-col px-4 pt-10 pb-6">
         <div class="px-2 mb-8">
           <span class="text-2xl font-bold tracking-tight text-ink">keepsake</span>
+          <p class="mt-1 text-sm text-muted">Memory for AI agents.</p>
         </div>
 
         <nav class="space-y-1" id="nav">
@@ -213,14 +214,14 @@
         </nav>
 
         <div class="mt-auto space-y-4">
-          <div class="rounded-2xl bg-brand-500/10 border border-brand-500/20 p-4">
+          <div class="pane-soft rounded-2xl p-4">
             <div class="flex items-center gap-2 mb-1.5">
               <svg class="w-4.5 h-4.5 text-brand-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
               <span class="text-sm font-semibold text-ink">Your data stays with you</span>
             </div>
             <p class="text-xs text-muted leading-relaxed">Local-first &amp; end-to-end encrypted. No tracking, no AI server.</p>
           </div>
-          <div class="flex items-center gap-3 px-2">
+          <div class="pane-soft rounded-2xl p-3 flex items-center gap-3">
             <div class="w-9 h-9 rounded-full bg-neutral-900 text-white flex items-center justify-center shrink-0">
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
             </div>
@@ -235,76 +236,138 @@
       <!-- Main -->
       <main class="flex-1 min-w-0 overflow-y-auto overscroll-contain h-screen">
         <!-- ===== Home ===== -->
-        <section data-screen="start" class="view px-8 py-10 max-w-3xl mx-auto">
-          <!-- Hero: lead with what to do, in plain words -->
-          <div class="text-center">
-            <h1 class="text-3xl font-bold tracking-tight text-ink">Your private notebook</h1>
-            <p class="mt-3 text-xl text-muted">Tell me anything you want to remember — an appointment, a name, where you put something. I'll keep it safe, just for you.</p>
-          </div>
+        <section data-screen="start" class="view px-8 py-8 max-w-[1180px] mx-auto">
+          <div class="grid gap-7 2xl:grid-cols-[minmax(0,1fr)_20rem]">
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h1 class="text-2xl font-semibold tracking-tight text-ink">Good morning</h1>
+                  <p class="mt-1 text-sm text-muted">Your memory is private, local, and under your control.</p>
+                </div>
+                <div class="pane-soft rounded-xl px-4 py-3 flex items-center gap-3">
+                  <span class="status-dot"></span>
+                  <div>
+                    <div class="text-sm font-semibold text-brand-700">All protected</div>
+                    <div class="text-xs text-muted">End-to-end, local</div>
+                  </div>
+                </div>
+              </div>
 
-          <!-- Capture -->
-          <div class="mt-8 bg-surface border-2 border-line rounded-2xl shadow-sm p-3 flex items-center gap-2">
-            <input id="remember-input" type="text" placeholder="What should I remember for you?"
-              class="flex-1 bg-transparent px-3 py-2 text-lg text-ink placeholder:text-muted focus:outline-none" />
-            <button id="remember-btn"
-              class="min-h-[52px] px-6 rounded-xl bg-brand-700 hover:bg-brand-800 text-white text-lg font-semibold transition shrink-0">
-              Remember
-            </button>
-          </div>
+              <div class="mt-6 grid gap-5 xl:grid-cols-[0.92fr_1fr]">
+                <section class="pane rounded-2xl p-5">
+                  <div class="flex items-center gap-5">
+                    <div class="icon-cell w-28 h-28 rounded-2xl flex items-center justify-center shrink-0">
+                      <svg class="w-14 h-14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 19 6v5.5c0 4.2-2.7 7.6-7 9-4.3-1.4-7-4.8-7-9V6l7-2.5Z"/><path d="m8.7 12.3 2.2 2.2 4.8-5"/></svg>
+                    </div>
+                    <div class="min-w-0">
+                      <div class="text-sm text-muted">Secure status</div>
+                      <h2 class="mt-1 text-lg xl:text-xl font-semibold text-ink sm:whitespace-nowrap">100% secure &amp; local</h2>
+                      <p class="mt-1 text-sm text-muted">All systems operational.</p>
+                      <ul class="mt-4 space-y-2 text-sm text-muted">
+                        <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-brand-500"></span>Memory is encrypted</li>
+                        <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-brand-500"></span>Keys are on this device</li>
+                        <li class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-brand-500"></span>No data leaves this device</li>
+                      </ul>
+                    </div>
+                  </div>
+                </section>
 
-          <!-- Examples: tap to fill, you still press Remember -->
-          <div class="mt-4 flex flex-wrap items-center gap-2">
-            <span class="text-base text-muted">For example:</span>
-            <button class="example-chip min-h-[44px] rounded-full border-2 border-line bg-surface px-4 text-base text-ink hover:border-line hover:bg-canvas transition" data-fill="Dentist appointment on Monday at 2 pm">🗓 Dentist, Monday 2 pm</button>
-            <button class="example-chip min-h-[44px] rounded-full border-2 border-line bg-surface px-4 text-base text-ink hover:border-line hover:bg-canvas transition" data-fill="Anna's birthday is on March 14">🎂 Anna's birthday is March 14</button>
-            <button class="example-chip min-h-[44px] rounded-full border-2 border-line bg-surface px-4 text-base text-ink hover:border-line hover:bg-canvas transition" data-fill="The house key is in the blue drawer">🔑 House key is in the blue drawer</button>
-          </div>
+                <section class="pane rounded-2xl p-5">
+                  <h2 class="text-lg font-semibold text-ink">Privacy Dial</h2>
+                  <p class="mt-1 text-sm text-muted">Choose your data posture.</p>
+                  <div class="mt-6 grid grid-cols-4 gap-2">
+                    <button class="privacy-step active" data-sync="off" type="button">
+                      <span class="privacy-icon">
+                        <svg viewBox="0 0 24 24"><rect x="6" y="10" width="12" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                      </span>
+                      <span>Local only</span>
+                    </button>
+                    <button class="privacy-step" data-home-view="einstellungen" type="button">
+                      <span class="privacy-icon">
+                        <svg viewBox="0 0 24 24"><path d="M12 4v16"/><path d="M7 9a5 5 0 0 1 10 0c0 4-5 7-5 7s-5-3-5-7Z"/></svg>
+                      </span>
+                      <span>Local backup</span>
+                    </button>
+                    <button class="privacy-step" data-home-view="einstellungen" type="button">
+                      <span class="privacy-icon">
+                        <svg viewBox="0 0 24 24"><path d="M5 12.5 12 5l7 7.5"/><path d="M8 11.5V19h8v-7.5"/></svg>
+                      </span>
+                      <span>Encrypted sync</span>
+                    </button>
+                    <button class="privacy-step" data-home-view="einstellungen" type="button">
+                      <span class="privacy-icon">
+                        <svg viewBox="0 0 24 24"><path d="M4 7.5 12 4l8 3.5v6.2c0 3.9-3 6.3-8 7.3-5-1-8-3.4-8-7.3V7.5Z"/><path d="M9 12h6"/></svg>
+                      </span>
+                      <span>Vault mode</span>
+                    </button>
+                  </div>
+                  <div class="mt-5 pane-soft rounded-xl px-4 py-3 flex items-start gap-3">
+                    <svg class="mt-0.5 w-5 h-5 text-muted shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 19 6v5.5c0 4.2-2.7 7.6-7 9-4.3-1.4-7-4.8-7-9V6l7-2.5Z"/></svg>
+                    <div>
+                      <div class="text-sm font-semibold text-ink">Local only</div>
+                      <div class="text-sm text-muted">Your data never leaves this device.</div>
+                    </div>
+                  </div>
+                </section>
+              </div>
 
-          <div class="mt-8 grid gap-3 sm:grid-cols-2">
-            <button data-home-view="quellen" class="home-action text-left min-h-[96px] rounded-2xl border-2 border-line bg-surface p-4 hover:bg-canvas transition">
-              <div class="text-base font-semibold text-ink">Add context</div>
-              <div class="mt-1 text-sm text-muted">Import AI chats, notes, files, exports, and local memory stores.</div>
-            </button>
-            <button data-home-view="suchen" class="home-action text-left min-h-[96px] rounded-2xl border-2 border-line bg-surface p-4 hover:bg-canvas transition">
-              <div class="text-base font-semibold text-ink">Search memory</div>
-              <div class="mt-1 text-sm text-muted">Ask normally, then choose balanced, recent, semantic, graph, or hybrid search.</div>
-            </button>
-            <button data-home-view="agents" class="home-action text-left min-h-[96px] rounded-2xl border-2 border-line bg-surface p-4 hover:bg-canvas transition">
-              <div class="text-base font-semibold text-ink">Connect agent</div>
-              <div class="mt-1 text-sm text-muted">Use Keepsake as shared memory for Claude Code, Cursor, Codex, or OpenCode.</div>
-            </button>
-            <button data-home-view="profile" class="home-action text-left min-h-[96px] rounded-2xl border-2 border-line bg-surface p-4 hover:bg-canvas transition">
-              <div class="text-base font-semibold text-ink">Review profile</div>
-              <div class="mt-1 text-sm text-muted">See the local summary Keepsake can give assistants first.</div>
-            </button>
-          </div>
+              <div class="mt-5 pane rounded-2xl p-3 flex items-center gap-3">
+                <div class="icon-cell w-11 h-11 rounded-xl flex items-center justify-center shrink-0">
+                  <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5 12 3l8 3.5v10L12 21l-8-4.5v-10Z"/><path d="M12 12 4 6.5"/><path d="m12 12 8-5.5"/><path d="M12 12v9"/></svg>
+                </div>
+                <input id="remember-input" type="text" placeholder="What should I remember for you?"
+                  class="flex-1 min-w-0 bg-transparent px-2 py-3 text-base text-ink placeholder:text-muted focus:outline-none" />
+                <button id="remember-btn"
+                  class="min-h-[48px] w-14 rounded-xl bg-brand-600 hover:bg-brand-700 text-white transition shrink-0 inline-flex items-center justify-center" aria-label="Remember">
+                  <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+                </button>
+              </div>
+
+              <div class="mt-3 flex flex-wrap items-center gap-2 text-sm">
+                <span class="text-muted">Examples</span>
+                <button class="example-chip text-muted hover:text-ink underline underline-offset-4 transition" data-fill="Dentist appointment on Monday at 2 pm">Dentist, Monday 2 pm</button>
+                <button class="example-chip text-muted hover:text-ink underline underline-offset-4 transition" data-fill="Anna's birthday is on March 14">Anna's birthday is March 14</button>
+                <button class="example-chip text-muted hover:text-ink underline underline-offset-4 transition" data-fill="The house key is in the blue drawer">House key is in the blue drawer</button>
+              </div>
 
           <!-- Recently added (hidden until the first memory exists) -->
-          <div id="recent-header" class="hidden mt-10 flex items-center justify-between">
-            <h2 class="text-xl font-bold text-ink">Recently added</h2>
-            <span id="start-count" class="text-base text-muted"></span>
-          </div>
-          <div id="timeline" class="mt-4"></div>
-          <div id="start-empty" class="hidden text-center py-14">
-            <div class="mx-auto mb-4 w-16 h-16 rounded-2xl bg-brand-50 flex items-center justify-center">
+              <div id="recent-header" class="hidden mt-6 flex items-center justify-between">
+                <h2 class="text-lg font-semibold text-ink">Recently added</h2>
+                <button data-home-view="erinnerungen" class="home-action text-sm font-medium text-brand-700 hover:text-brand-800">View all memories</button>
+              </div>
+              <div id="timeline" class="mt-3 memory-table rounded-2xl"></div>
+              <div id="start-empty" class="hidden text-center py-14">
+                <div class="mx-auto mb-4 w-16 h-16 rounded-2xl bg-brand-50 flex items-center justify-center">
               <svg class="w-8 h-8 text-brand-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-            </div>
-            <p class="text-xl font-semibold text-ink">Nothing saved yet — and that's okay.</p>
-            <p class="mt-2 text-lg text-muted">Whatever you type above lands here, newest first. Only you can read it.</p>
-          </div>
+                </div>
+                <p class="text-xl font-semibold text-ink">Nothing saved yet.</p>
+                <p class="mt-2 text-lg text-muted">Whatever you type above lands here, newest first. Only you can read it.</p>
+              </div>
 
-          <!-- Honest status (reads the real sync setting) -->
-          <p class="mt-12 flex items-center justify-center gap-2 text-base text-muted">
-            <span class="w-2.5 h-2.5 rounded-full bg-brand-500"></span>
-            <span id="home-status-text">Saved only on this computer. Nothing is sent anywhere.</span>
-          </p>
+              <p class="mt-5 flex items-center gap-2 text-sm text-muted">
+                <span class="status-dot"></span>
+                <span id="home-status-text">Saved only on this computer. Nothing is sent anywhere.</span>
+              </p>
+            </div>
+
+            <aside class="detail-panel rounded-2xl px-5 py-5 hidden 2xl:block">
+              <div class="flex items-center justify-between gap-3">
+                <h2 class="text-sm font-semibold text-ink">Memory details</h2>
+                <div class="flex items-center gap-1 text-muted">
+                  <button class="w-8 h-8 inline-flex items-center justify-center rounded-lg hover:bg-canvas transition" aria-label="Favorite memory"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17.5 6.8 20l1-5.8-4.2-4.1 5.8-.9L12 4l2.6 5.2 5.8.9-4.2 4.1 1 5.8-5.2-2.5Z"/></svg></button>
+                  <button class="w-8 h-8 inline-flex items-center justify-center rounded-lg hover:bg-canvas transition" aria-label="Edit memory"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m14 4 6 6"/><path d="M4 20h6L20 10l-6-6L4 14v6Z"/></svg></button>
+                </div>
+              </div>
+              <div id="home-detail" class="mt-7"></div>
+            </aside>
+          </div>
         </section>
 
         <!-- ===== Memories ===== -->
-        <section data-screen="erinnerungen" class="view hidden px-8 py-8 max-w-4xl mx-auto">
+        <section data-screen="erinnerungen" class="view hidden px-8 py-8 max-w-5xl mx-auto">
           <h1 class="text-2xl font-bold tracking-tight text-ink">Memories</h1>
           <p class="text-muted mt-1">Everything Keepsake remembers for you — end-to-end encrypted.</p>
-          <div id="all-list" class="mt-6 space-y-2"></div>
+          <div id="all-list" class="mt-6"></div>
           <p id="all-empty" class="hidden text-center text-sm text-muted py-12">No memories yet.</p>
         </section>
 
@@ -312,22 +375,25 @@
         <section data-screen="quellen" class="view hidden px-8 py-8 max-w-6xl mx-auto">
           <div class="flex flex-wrap items-end justify-between gap-4">
             <div>
-              <h1 class="text-2xl font-bold tracking-tight text-ink">Bring your context together</h1>
-              <p class="mt-1 text-muted">Local sources work now. Cloud sources stay planned until you explicitly connect them.</p>
+              <h1 class="text-2xl font-semibold tracking-tight text-ink">Bring your context together</h1>
+              <p class="mt-1 text-sm text-muted">Local sources work now. Cloud sources stay planned until you explicitly connect them.</p>
             </div>
-            <button id="sources-refresh" class="min-h-[44px] rounded-xl border-2 border-line bg-surface px-4 text-sm font-semibold text-ink hover:bg-canvas transition">Refresh</button>
+            <button id="sources-refresh" class="min-h-[40px] rounded-lg border border-line bg-surface px-3 text-sm font-medium text-ink hover:bg-canvas transition">Refresh</button>
           </div>
-          <div id="connector-starters" class="mt-6 grid gap-4 md:grid-cols-3"></div>
+          <div>
+            <h2 class="mt-6 text-sm font-semibold text-ink">Recommended starters</h2>
+            <div id="connector-starters" class="mt-3 memory-table rounded-2xl"></div>
+          </div>
           <div class="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
             <div>
               <div class="flex items-center justify-between gap-3">
-                <h2 class="text-lg font-semibold text-ink">All sources</h2>
+                <h2 class="text-sm font-semibold text-ink">All sources</h2>
                 <span id="connector-count" class="text-sm text-muted"></span>
               </div>
-              <div id="connector-list" class="mt-3 space-y-2"></div>
+              <div id="connector-list" class="mt-3 memory-table rounded-2xl"></div>
             </div>
-            <aside class="rounded-2xl border-2 border-line bg-surface p-5">
-              <h2 class="text-lg font-semibold text-ink">Documents</h2>
+            <aside class="pane rounded-2xl p-5">
+              <h2 class="text-sm font-semibold text-ink">Documents</h2>
               <p class="mt-1 text-sm text-muted">Recent memories grouped by their source.</p>
               <div id="document-list" class="mt-4 space-y-2"></div>
             </aside>
@@ -343,13 +409,13 @@
             </div>
           </div>
           <div id="agent-clients" class="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"></div>
-          <div class="mt-6 rounded-2xl border-2 border-line bg-surface p-5">
+          <div class="mt-6 pane rounded-2xl p-5">
             <div class="flex items-start justify-between gap-4">
               <div>
                 <h2 id="agent-setup-title" class="text-lg font-semibold text-ink">Codex setup</h2>
                 <p class="mt-1 text-sm text-muted">Run these locally. Keepsake serves one shared encrypted vault.</p>
               </div>
-              <button id="agent-copy-all" class="min-h-[44px] rounded-xl border-2 border-line px-4 text-sm font-semibold text-ink hover:bg-canvas transition">Copy all</button>
+              <button id="agent-copy-all" class="min-h-[40px] rounded-lg border border-line px-3 text-sm font-medium text-ink hover:bg-canvas transition">Copy all</button>
             </div>
             <div id="agent-setup-steps" class="mt-5 space-y-3"></div>
           </div>
@@ -368,11 +434,11 @@
             </div>
           </div>
           <div class="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
-            <div class="rounded-2xl border-2 border-line bg-surface p-5">
+            <div class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Profile</h2>
               <pre id="profile-text" class="mt-4 whitespace-pre-wrap text-sm leading-6 text-ink font-sans"></pre>
             </div>
-            <aside class="rounded-2xl border-2 border-line bg-surface p-5">
+            <aside class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Sources</h2>
               <p id="profile-count" class="mt-1 text-sm text-muted"></p>
               <div id="profile-sources" class="mt-4 space-y-2"></div>
@@ -389,7 +455,7 @@
           <div class="relative">
             <svg class="absolute left-4 top-1/2 -translate-y-1/2 w-6 h-6 text-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
             <input id="search-input" type="text" placeholder="Type a question, like: when is my doctor's appointment?"
-              class="w-full rounded-2xl border-2 border-line bg-surface pl-12 pr-12 py-4 text-lg text-ink placeholder:text-muted shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400" />
+              class="w-full rounded-2xl border border-line bg-surface pl-12 pr-12 py-4 text-lg text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400" />
             <button id="search-clear" class="hidden absolute right-3 top-1/2 -translate-y-1/2 inline-flex items-center justify-center w-9 h-9 rounded-lg text-muted hover:bg-canvas hover:text-ink transition">
               <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
@@ -403,9 +469,9 @@
           </div>
           <!-- Example questions: tap to run -->
           <div id="search-examples" class="mt-4 flex flex-wrap justify-center gap-2">
-            <button class="search-chip min-h-[44px] rounded-full border-2 border-line bg-surface px-4 text-base text-ink hover:border-line hover:bg-canvas transition" data-q="What appointments do I have?">🗓 What appointments do I have?</button>
-            <button class="search-chip min-h-[44px] rounded-full border-2 border-line bg-surface px-4 text-base text-ink hover:border-line hover:bg-canvas transition" data-q="When is my trip?">✈️ When is my trip?</button>
-            <button class="search-chip min-h-[44px] rounded-full border-2 border-line bg-surface px-4 text-base text-ink hover:border-line hover:bg-canvas transition" data-q="What did I save about my medicine?">💊 About my medicine</button>
+            <button class="search-chip min-h-[40px] rounded-lg border border-line bg-surface px-3 text-sm text-ink hover:bg-canvas transition" data-q="What appointments do I have?">Appointments</button>
+            <button class="search-chip min-h-[40px] rounded-lg border border-line bg-surface px-3 text-sm text-ink hover:bg-canvas transition" data-q="When is my trip?">Trip dates</button>
+            <button class="search-chip min-h-[40px] rounded-lg border border-line bg-surface px-3 text-sm text-ink hover:bg-canvas transition" data-q="What did I save about my medicine?">Medicine</button>
           </div>
           <ul id="search-results" class="mt-6 space-y-3"></ul>
           <div id="search-empty" class="hidden"></div>
@@ -416,7 +482,7 @@
           <h1 class="text-3xl font-bold tracking-tight text-ink">Settings</h1>
           <div class="mt-6 space-y-4">
             <!-- Your memories -->
-            <div class="bg-surface border-2 border-line rounded-2xl p-5">
+            <div class="pane rounded-2xl p-5">
               <div class="flex items-center justify-between">
                 <span class="text-lg text-ink">Memories saved</span>
                 <span id="set-count" class="text-lg font-bold text-ink">–</span>
@@ -425,14 +491,14 @@
             </div>
 
             <!-- Bring your memories in (import from other AI systems) -->
-            <div class="bg-surface border-2 border-line rounded-2xl p-5">
+            <div class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Bring your memories in</h2>
               <p class="mt-1 text-base text-muted">Switching from another AI? Pull the memory you already built up — it's deduplicated and tidied automatically, and everything stays on this computer.</p>
               <button id="import-open" class="mt-3 min-h-[48px] inline-flex items-center rounded-xl border-2 border-line px-5 text-base font-semibold text-ink hover:bg-canvas transition">Import memories</button>
             </div>
 
             <!-- Appearance (light / dark / system) -->
-            <div class="bg-surface border-2 border-line rounded-2xl p-5">
+            <div class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Appearance</h2>
               <p class="mt-1 text-base text-muted">Light, dark, or follow your Mac.</p>
               <div class="mt-3 inline-flex rounded-xl border-2 border-line overflow-hidden" role="group" aria-label="Theme">
@@ -443,7 +509,7 @@
             </div>
 
             <!-- Your 24 words (reveal, like a wallet) -->
-            <div class="bg-surface border-2 border-line rounded-2xl p-5">
+            <div class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Your 24 words</h2>
               <p class="mt-1 text-base text-muted">These open your memories. Keep them private — and write them on paper if you haven't yet.</p>
               <button id="reveal-seed-btn" class="mt-3 min-h-[48px] inline-flex items-center gap-2 rounded-xl border-2 border-line px-5 text-base font-semibold text-ink hover:bg-canvas transition">
@@ -451,14 +517,14 @@
                 Show my 24 words
               </button>
               <div id="reveal-seed-area" class="hidden mt-3">
-                <p class="text-base font-medium text-amber-700">⚠ Make sure no one is looking over your shoulder.</p>
+                <p class="text-base font-medium text-amber-700">Make sure no one is looking over your shoulder.</p>
                 <div id="reveal-seed-grid" class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2"></div>
                 <button id="reveal-seed-hide" class="mt-3 min-h-[44px] text-base font-medium text-muted hover:text-ink underline underline-offset-2">Hide</button>
               </div>
             </div>
 
             <!-- Quick unlock (PIN) -->
-            <div class="bg-surface border-2 border-line rounded-2xl p-5">
+            <div class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Quick unlock</h2>
               <p class="mt-1 text-base text-muted">Open Keepsake with a short PIN instead of typing all 24 words every time. Your 24 words still work, and stay your master backup.</p>
 
@@ -472,7 +538,7 @@
               </div>
 
               <div id="qu-on" class="hidden">
-                <p class="mt-2 text-base font-medium text-brand-700">✓ Quick unlock is on for this device.</p>
+                <p class="mt-2 text-base font-medium text-brand-700">Quick unlock is on for this device.</p>
                 <div class="mt-3 flex flex-wrap gap-2">
                   <button id="qu-change-btn" class="min-h-[44px] rounded-xl border-2 border-line px-4 text-base font-semibold text-ink hover:bg-canvas transition">Change PIN</button>
                   <button id="qu-disable-btn" class="min-h-[44px] rounded-xl px-4 text-base font-medium text-red-600 hover:text-red-700">Turn off</button>
@@ -487,7 +553,7 @@
             </div>
 
             <!-- Your safety net (social recovery) -->
-            <div class="bg-surface border-2 border-line rounded-2xl p-5">
+            <div class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Your safety net</h2>
               <p class="mt-1 text-base text-muted">Give a sealed piece of your key to 2–3 people you trust. If you ever lose your words, any two of them together can bring your memories back. None of them can ever read your memories.</p>
               <p id="safetynet-status" class="mt-2 text-base font-medium text-amber-700">Not set up yet.</p>
@@ -495,7 +561,7 @@
             </div>
 
             <!-- Your other devices (sync) -->
-            <div class="bg-surface border-2 border-line rounded-2xl p-5 space-y-3">
+            <div class="pane rounded-2xl p-5 space-y-3">
               <div>
                 <h2 class="text-lg font-semibold text-ink">Your other devices</h2>
                 <p class="mt-1 text-base text-muted">Off by default — your notes stay only here. When on, your devices share the same notes, privately: the place in the middle can never read them.</p>
@@ -513,7 +579,7 @@
             </div>
 
             <!-- A safe copy (encrypted backup) -->
-            <div class="bg-surface border-2 border-line rounded-2xl p-5">
+            <div class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">A safe copy</h2>
               <p class="mt-1 text-base text-muted">Keep an encrypted copy online, so if this computer is ever lost or breaks, you can get all your memories back on a new one. We can never read it.</p>
               <p id="backup-status" class="mt-2 text-base font-medium text-amber-700">Off.</p>
@@ -524,7 +590,7 @@
             </div>
 
             <!-- Updates (manual + honest: no automatic network call on startup) -->
-            <div class="bg-surface border-2 border-line rounded-2xl p-5">
+            <div class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Updates</h2>
               <p class="mt-1 text-base text-muted">Keepsake never phones home. The only time it reaches the internet for updates is when you press this button.</p>
               <p id="update-status" class="mt-2 text-base font-medium text-muted hidden"></p>
@@ -534,7 +600,7 @@
             </div>
 
             <!-- For helpers & techies (advanced; quarantined away from the grandma surface) -->
-            <details class="bg-surface border-2 border-line rounded-2xl p-5">
+            <details class="pane rounded-2xl p-5">
               <summary class="text-lg font-semibold text-ink cursor-pointer select-none">For helpers &amp; techies</summary>
               <div class="mt-3 space-y-2 text-base text-muted">
                 <p>This computer can let an AI assistant you run here — like a coding assistant — remember things in Keepsake and look them up, automatically. Your 24 words are never shared; the assistant only ever gets a limited pass, and you can switch it off anytime.</p>
@@ -565,17 +631,17 @@
 
             <!-- floating controls -->
             <div class="absolute top-4 left-8 right-8 flex flex-wrap items-center gap-2.5 pointer-events-none">
-              <div class="pointer-events-auto flex items-center gap-2 rounded-xl bg-surface border border-line px-3 py-2 shadow-sm">
+              <div class="pointer-events-auto flex items-center gap-2 rounded-xl bg-surface border border-line px-3 py-2">
                 <svg class="w-4 h-4 text-muted shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
                 <input id="map-search" type="text" placeholder="Find a memory…" class="bg-transparent text-sm text-ink placeholder:text-muted focus:outline-none w-40" />
               </div>
-              <div class="pointer-events-auto flex items-center gap-2 rounded-xl bg-surface border border-line px-3 py-2 shadow-sm">
+              <div class="pointer-events-auto flex items-center gap-2 rounded-xl bg-surface border border-line px-3 py-2">
                 <span class="text-xs text-muted">Looser</span>
                 <input id="map-tightness" type="range" min="0" max="100" value="50" class="w-24 accent-brand-500 cursor-pointer" />
                 <span class="text-xs text-muted">Tighter</span>
               </div>
-              <button id="map-rearrange" class="pointer-events-auto rounded-xl bg-surface border border-line px-3 py-2 text-xs font-medium text-muted hover:text-ink shadow-sm transition">Re-arrange</button>
-              <div id="map-count" class="pointer-events-none ml-auto rounded-xl bg-surface border border-line px-3 py-2 text-xs text-muted shadow-sm"></div>
+              <button id="map-rearrange" class="pointer-events-auto rounded-xl bg-surface border border-line px-3 py-2 text-xs font-medium text-muted hover:text-ink transition">Re-arrange</button>
+              <div id="map-count" class="pointer-events-none ml-auto rounded-xl bg-surface border border-line px-3 py-2 text-xs text-muted"></div>
             </div>
 
             <!-- empty state -->

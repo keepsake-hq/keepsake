@@ -2,43 +2,48 @@
 @source "../index.html";
 @source "../app.js";
 
-/* Keepsake design system — light, calm, "secure & local". Source of truth: the
-   product mockups (green accent, soft cards, generous spacing). Fonts use the native
-   system stack (SF Pro on macOS) so the app stays fully offline with no web fonts. */
+/* Keepsake design system — quiet macOS product UI, local-first, no decorative AI gloss.
+   Fonts use the native system stack (SF Pro on macOS) so the app stays fully offline. */
 @theme {
   --font-sans:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica,
     Arial, sans-serif;
 
-  /* Brand green */
-  --color-brand-50: #f0fdf4;
-  --color-brand-100: #dcfce7;
-  --color-brand-200: #bbf7d0;
-  --color-brand-300: #86efac;
-  --color-brand-400: #4ade80;
-  --color-brand-500: #22c55e;
-  --color-brand-600: #16a34a;
-  --color-brand-700: #15803d;
-  --color-brand-800: #166534;
+  /* Brand green: calm, not neon. */
+  --color-brand-50: #eef8f0;
+  --color-brand-100: #dcefe1;
+  --color-brand-200: #b9dec3;
+  --color-brand-300: #8ac99e;
+  --color-brand-400: #53ad71;
+  --color-brand-500: #22984f;
+  --color-brand-600: #13813f;
+  --color-brand-700: #0f6d35;
+  --color-brand-800: #10552e;
 
-  /* App surfaces — semantic tokens so a dark theme is just a re-point (see `.dark` below). */
-  --color-canvas: #f6f7f8; /* page background + subtle fills */
-  --color-sidebar: #ffffff;
-  --color-surface: #ffffff; /* cards / modals */
-  --color-ink: #262626; /* primary text */
-  --color-muted: #525252; /* secondary text */
-  --color-line: #e5e5e5; /* borders / dividers */
+  /* App surfaces — semantic tokens so a dark theme is just a re-point. */
+  --color-canvas: #f7f8f6;
+  --color-sidebar: #fbfbfa;
+  --color-surface: #ffffff;
+  --color-panel: #fdfdfc;
+  --color-ink: #181a17;
+  --color-muted: #60665f;
+  --color-soft: #858b84;
+  --color-line: #e3e5e0;
+  --color-line-strong: #d4d8d1;
 }
 
 /* Dark theme: re-point the same surface tokens, and everything built on bg-surface / text-ink /
    text-muted / border-line / bg-canvas follows. Toggled by adding `.dark` to <html> (see app.js). */
 .dark {
-  --color-canvas: #0f1318;
-  --color-sidebar: #161b22;
-  --color-surface: #1b2129;
-  --color-ink: #e6e9ec;
-  --color-muted: #9aa4af;
-  --color-line: #2a313a;
+  --color-canvas: #111411;
+  --color-sidebar: #151915;
+  --color-surface: #191f19;
+  --color-panel: #171c17;
+  --color-ink: #edf0eb;
+  --color-muted: #a4aaa2;
+  --color-soft: #7f877d;
+  --color-line: #2a3029;
+  --color-line-strong: #373f35;
 }
 .dark *::-webkit-scrollbar-thumb {
   background: #3a424d;
@@ -80,6 +85,7 @@ html {
 body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  font-variant-numeric: tabular-nums;
 }
 /* Every in-app scroll region keeps its scroll to itself (no chaining to the window). */
 .scroll-pane {
@@ -120,6 +126,117 @@ body {
 }
 ::selection {
   background: color-mix(in srgb, var(--color-brand-500) 22%, transparent);
+}
+
+.app-window {
+  background:
+    radial-gradient(circle at 30% -20%, color-mix(in srgb, var(--color-brand-100) 34%, transparent), transparent 34rem),
+    linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 72%, transparent), var(--color-canvas));
+}
+.dark .app-window {
+  background:
+    radial-gradient(circle at 30% -20%, color-mix(in srgb, var(--color-brand-800) 20%, transparent), transparent 34rem),
+    linear-gradient(180deg, var(--color-canvas), #0f120f);
+}
+.pane {
+  border: 1px solid var(--color-line);
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  box-shadow: 0 18px 50px color-mix(in srgb, var(--color-ink) 7%, transparent);
+}
+.pane-soft {
+  border: 1px solid var(--color-line);
+  background: color-mix(in srgb, var(--color-panel) 96%, transparent);
+}
+.row-surface {
+  border: 1px solid transparent;
+  background: transparent;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    transform 180ms ease;
+}
+.row-surface:hover {
+  border-color: var(--color-line);
+  background: color-mix(in srgb, var(--color-surface) 76%, transparent);
+}
+.row-surface:active {
+  transform: translateY(1px);
+}
+.icon-cell {
+  border: 1px solid var(--color-line);
+  background: color-mix(in srgb, var(--color-brand-50) 70%, var(--color-surface));
+  color: var(--color-brand-700);
+}
+.muted-rule {
+  border-color: var(--color-line);
+}
+.subtle-label {
+  color: var(--color-soft);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.memory-table {
+  border: 1px solid var(--color-line);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+.memory-table-row + .memory-table-row {
+  border-top: 1px solid var(--color-line);
+}
+.detail-panel {
+  border-left: 1px solid var(--color-line);
+  background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+}
+.status-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--color-brand-500);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-brand-500) 14%, transparent);
+}
+.privacy-step {
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 0.55rem;
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.privacy-icon {
+  width: 3rem;
+  height: 3rem;
+  border: 1px solid var(--color-line);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface);
+  color: var(--color-muted);
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+}
+.privacy-icon svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.privacy-step.active,
+.privacy-step:hover {
+  color: var(--color-brand-700);
+}
+.privacy-step.active .privacy-icon,
+.privacy-step:hover .privacy-icon {
+  border-color: var(--color-brand-300);
+  background: var(--color-brand-600);
+  color: #fff;
 }
 *::-webkit-scrollbar {
   width: 10px;
