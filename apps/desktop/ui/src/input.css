@@ -129,23 +129,45 @@ body {
 }
 
 .app-window {
-  background:
-    radial-gradient(circle at 30% -20%, color-mix(in srgb, var(--color-brand-100) 34%, transparent), transparent 34rem),
-    linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 72%, transparent), var(--color-canvas));
+  background: var(--color-canvas);
 }
 .dark .app-window {
-  background:
-    radial-gradient(circle at 30% -20%, color-mix(in srgb, var(--color-brand-800) 20%, transparent), transparent 34rem),
-    linear-gradient(180deg, var(--color-canvas), #0f120f);
+  background: var(--color-canvas);
 }
 .pane {
   border: 1px solid var(--color-line);
   background: color-mix(in srgb, var(--color-surface) 92%, transparent);
-  box-shadow: 0 18px 50px color-mix(in srgb, var(--color-ink) 7%, transparent);
+  box-shadow: none;
 }
 .pane-soft {
   border: 1px solid var(--color-line);
   background: color-mix(in srgb, var(--color-panel) 96%, transparent);
+}
+.command-bar {
+  border: 1px solid var(--color-line);
+  background: var(--color-surface);
+}
+.utility-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem 1.5rem;
+  border-top: 1px solid var(--color-line);
+  border-bottom: 1px solid var(--color-line);
+  padding: 0.7rem 0;
+  font-size: 0.82rem;
+  color: var(--color-muted);
+}
+.utility-bar div {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+.utility-bar span {
+  color: var(--color-soft);
+}
+.utility-bar strong {
+  color: var(--color-ink);
+  font-weight: 500;
 }
 .row-surface {
   border: 1px solid transparent;
@@ -164,8 +186,8 @@ body {
 }
 .icon-cell {
   border: 1px solid var(--color-line);
-  background: color-mix(in srgb, var(--color-brand-50) 70%, var(--color-surface));
-  color: var(--color-brand-700);
+  background: var(--color-surface);
+  color: var(--color-muted);
 }
 .muted-rule {
   border-color: var(--color-line);
@@ -184,15 +206,27 @@ body {
   border-top: 1px solid var(--color-line);
 }
 .detail-panel {
-  border-left: 1px solid var(--color-line);
-  background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  border: 1px solid var(--color-line);
+  background: var(--color-surface);
 }
 .status-dot {
-  width: 0.55rem;
-  height: 0.55rem;
+  width: 0.45rem;
+  height: 0.45rem;
   border-radius: 999px;
   background: var(--color-brand-500);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-brand-500) 14%, transparent);
+  box-shadow: none;
+}
+.pane.rounded-2xl,
+.pane-soft.rounded-2xl,
+.memory-table.rounded-2xl {
+  border-radius: 10px;
+}
+.pane.rounded-xl,
+.pane-soft.rounded-xl,
+.command-bar.rounded-lg,
+.memory-table.rounded-lg,
+.detail-panel.rounded-lg {
+  border-radius: 8px;
 }
 .privacy-step {
   min-width: 0;

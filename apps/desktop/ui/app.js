@@ -53,8 +53,6 @@ refreshThemeButtons();
 
 const ICON_NOTE =
   '<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>';
-const ICON_LOCK_S =
-  '<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
 const ICON_TRASH =
   '<svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
 const ICON_PLANE =
@@ -131,7 +129,6 @@ function cardHtml(mem) {
           <span>${src ? escapeHtml(src) : "added here"}</span>
         </div>
       </div>
-      <span class="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-line bg-surface px-2.5 py-1 text-xs text-muted">${ICON_LOCK_S} encrypted</span>
       <span class="text-xs text-muted tabular-nums shrink-0">${fmtTime(mem.created_at)}</span>
       <button data-forget="${mem.id}" aria-label="Remove this memory" class="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-lg text-muted hover:bg-red-50 hover:text-red-600 transition">${ICON_TRASH}</button>
     </div>`;
@@ -276,20 +273,18 @@ function renderHomeDetail(mem) {
     .filter((m) => m.id !== mem.id)
     .slice(0, 3);
   host.innerHTML = `
-    <div class="inline-flex items-center gap-2 rounded-lg bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-700">Preference</div>
-    <h3 class="mt-5 text-lg font-semibold leading-snug text-ink">${escapeHtml(title.trim())}</h3>
+    <h3 class="text-lg font-semibold leading-snug text-ink">${escapeHtml(title.trim())}</h3>
     <p class="mt-2 text-sm text-muted">${escapeHtml((mem.text || "").replace(/\s*\n\s*/g, " ").slice(0, 180))}</p>
     <div class="mt-6 border-t border-line pt-5">
       <h4 class="text-sm font-semibold text-ink">About this memory</h4>
       <dl class="mt-4 space-y-3 text-sm">
         <div class="flex justify-between gap-4"><dt class="text-muted">Source</dt><dd class="text-ink text-right">${escapeHtml(src)}</dd></div>
         <div class="flex justify-between gap-4"><dt class="text-muted">Created</dt><dd class="text-ink text-right">${escapeHtml(created)}</dd></div>
-        <div class="flex justify-between gap-4"><dt class="text-muted">Access count</dt><dd class="text-ink text-right">1</dd></div>
         <div class="flex justify-between gap-4"><dt class="text-muted">Memory ID</dt><dd class="text-ink text-right">${escapeHtml(mem.id.slice(0, 10))}…</dd></div>
       </dl>
     </div>
     <div class="mt-6 border-t border-line pt-5">
-      <h4 class="text-sm font-semibold text-ink">Related memories</h4>
+      <h4 class="text-sm font-semibold text-ink">Related</h4>
       <div class="mt-3 space-y-2">
         ${related
           .map((m) => `<div class="flex items-start justify-between gap-3 text-sm"><span class="text-muted">${escapeHtml((m.text || "").split("\n")[0].slice(0, 44))}</span><span class="text-xs text-soft">${escapeHtml(dateLabel(m.created_at).replace(/, 2026$/, ""))}</span></div>`)
@@ -653,18 +648,18 @@ function showUndoToast(id, text) {
       <span class="flex-1 text-lg">Removed "<span class="font-semibold">${escapeHtml(short)}</span>"</span>
       <button data-undo class="shrink-0 min-h-[44px] rounded-xl bg-surface/15 hover:bg-surface/25 px-4 py-2 text-lg font-semibold transition">Undo</button>
     </div>
-    <div data-bar class="h-1.5 bg-brand-500" style="width:100%;transition:width ${FORGET_DELAY_MS}ms linear"></div>`;
+    <div data-bar class="h-1.5 bg-brand-500 origin-left" style="transform:scaleX(1);transition:transform ${FORGET_DELAY_MS}ms linear"></div>`;
   document.body.appendChild(toast);
   toast.querySelector("[data-undo]").addEventListener("click", () => undoForget(id));
   requestAnimationFrame(() => {
     const bar = toast.querySelector("[data-bar]");
-    if (bar) bar.style.width = "0%";
+    if (bar) bar.style.transform = "scaleX(0)";
   });
 }
 
 function renderHit(h) {
   const icon = TRAVEL_RE.test(h.text) ? ICON_PLANE : ICON_NOTE;
-  const oneLine = h.text.replace(/\s*\n\s*/g, " — ");
+  const oneLine = h.text.replace(/\s*\n\s*/g, " · ");
   const src = sourceLabel(h.source);
   return `
     <li class="row-surface rounded-xl px-4 py-3 flex items-center gap-3">
@@ -672,7 +667,7 @@ function renderHit(h) {
       <div class="min-w-0 flex-1">
         <div class="text-sm font-medium text-ink truncate">${escapeHtml(oneLine)}</div>
         <div class="mt-1 flex items-center gap-2 text-xs text-muted">
-          <span class="inline-flex items-center gap-1.5">${ICON_LOCK_S} Memory</span>
+          <span>Memory</span>
           <span>${escapeHtml(SEARCH_MODE.replace("_", " "))}</span>
           ${src ? `<span>· ${escapeHtml(src)}</span>` : ""}
         </div>
@@ -934,12 +929,12 @@ setupSeedBoxes();
         const v = await invoke("check_update");
         if (v) {
           showUpdateBanner(v);
-          if (status) status.textContent = "Update " + v + " is available — see the banner up top.";
+          if (status) status.textContent = "Update " + v + " is available. See the banner up top.";
         } else if (status) {
           status.textContent = "You're up to date.";
         }
       } catch (_) {
-        if (status) status.textContent = "Couldn't check — check your internet.";
+        if (status) status.textContent = "Couldn't check. Check your internet.";
       } finally {
         uc.textContent = "Check for updates";
       }
@@ -1045,18 +1040,18 @@ function setSyncStatus(mode) {
   if (el) {
     el.textContent =
       mode === "hosted"
-        ? "On — your devices share the same notes, privately. The place in the middle can never read them."
+        ? "On. Your devices share the same notes privately. The place in the middle can never read them."
         : mode === "own"
-          ? "On — syncing through your own server."
-          : "Off — your notes stay only on this computer.";
+          ? "On. Syncing through your own server."
+          : "Off. Your notes stay only on this computer.";
   }
   // Keep the honest line on the Home screen in step with the real setting.
   const home = $("#home-status-text");
   if (home) {
     home.textContent =
       mode === "off"
-        ? "Saved only on this computer. Nothing is sent anywhere."
-        : "Saved on this computer and your other devices — privately.";
+        ? "Saved on this computer. Network is idle."
+        : "Saved on this computer and your other devices, privately.";
   }
 }
 
@@ -1284,7 +1279,7 @@ async function loadRecoveryStatus() {
     } catch (_) {}
   }
   if (meta && meta.names && meta.names.length) {
-    el.textContent = "On — pieces are with: " + meta.names.join(", ");
+    el.textContent = "On. Pieces are with: " + meta.names.join(", ");
     el.className = "mt-2 text-base font-medium text-brand-700";
   } else {
     el.textContent = "Not set up yet.";
@@ -1295,9 +1290,9 @@ async function loadRecoveryStatus() {
 function openRecoverySetup() {
   const o = modalShell(`
     <h2 class="text-2xl font-bold text-ink">Set up your safety net</h2>
-    <p class="mt-2 text-lg text-muted">We'll make 3 secret pieces. Give one to each of 3 people you trust. Any two of them together can bring your memories back — one alone can't read anything.</p>
+    <p class="mt-2 text-lg text-muted">We'll make 3 secret pieces. Give one to each of 3 people you trust. Any two of them together can bring your memories back. One alone can't read anything.</p>
     <div class="mt-5 space-y-3">
-      ${[1, 2, 3].map((i) => `<input class="rec-name w-full min-h-[52px] rounded-xl border-2 border-line px-4 text-lg" placeholder="Person ${i} — e.g. My daughter Anna">`).join("")}
+      ${[1, 2, 3].map((i) => `<input class="rec-name w-full min-h-[52px] rounded-xl border-2 border-line px-4 text-lg" placeholder="Person ${i}, e.g. My daughter Anna">`).join("")}
     </div>
     <div class="mt-6 flex gap-3">
       <button data-cancel class="flex-1 min-h-[52px] rounded-xl border-2 border-line text-lg font-semibold text-ink hover:bg-canvas transition">Cancel</button>
@@ -1342,7 +1337,7 @@ function showRecoveryPieces(names, pieces) {
         )
         .join("")}
     </div>
-    <button data-done class="mt-6 w-full min-h-[52px] rounded-xl bg-brand-700 text-white text-lg font-semibold hover:bg-brand-800 transition">Done — my safety net is on</button>`);
+    <button data-done class="mt-6 w-full min-h-[52px] rounded-xl bg-brand-700 text-white text-lg font-semibold hover:bg-brand-800 transition">Done. My safety net is on</button>`);
   o.querySelectorAll(".rec-save").forEach((b) =>
     b.addEventListener("click", () => {
       const i = +b.dataset.i;
@@ -1441,7 +1436,7 @@ async function loadBackupStatus() {
   }
   if (meta && meta.on) {
     status.textContent = meta.last_saved
-      ? "On — last saved " + fmtDate(meta.last_saved)
+      ? "On. Last saved " + fmtDate(meta.last_saved)
       : "On.";
     status.className = "mt-2 text-base font-medium text-brand-700";
     toggle.textContent = "Save a fresh copy now";
@@ -1490,7 +1485,7 @@ function backupPasswordModal({ title, intro, action, run }) {
 function openBackupEnable() {
   backupPasswordModal({
     title: "Keep a safe copy",
-    intro: "Choose a password for your safe copy. It's different from your 24 words. Write it down too — we can't reset it for you.",
+    intro: "Choose a password for your safe copy. It's different from your 24 words. Write it down too. We can't reset it for you.",
     action: "Turn on safe copy",
     run: async (pw) => {
       if (DEMO || !invoke) return;
@@ -1590,7 +1585,7 @@ function reviewAndImport(label, preview, host) {
 async function openImport() {
   const o = modalShell(`
     <h2 class="text-2xl font-bold text-ink">Bring your memories in</h2>
-    <p class="mt-2 text-base text-muted">Pull in the memory you built up in other AI tools — deduplicated and tidied automatically. Everything stays on this computer; nothing is uploaded.</p>
+    <p class="mt-2 text-base text-muted">Pull in the memory you built up in other AI tools. Keepsake deduplicates it locally. Nothing is uploaded.</p>
     <div class="mt-4">
       <h3 class="text-sm font-semibold uppercase tracking-wide text-muted">On this Mac</h3>
       <div data-mac class="mt-2 space-y-2"><p class="text-base text-muted">Looking…</p></div>
@@ -1601,7 +1596,7 @@ async function openImport() {
         <button data-pick-folder class="min-h-[48px] rounded-xl border-2 border-line px-4 text-base font-semibold text-ink hover:bg-canvas transition">Choose a folder…</button>
         <button data-pick-file class="min-h-[48px] rounded-xl border-2 border-line px-4 text-base font-semibold text-ink hover:bg-canvas transition">Choose a file…</button>
       </div>
-      <textarea data-paste rows="3" class="mt-2 w-full rounded-xl border-2 border-line p-3 text-base" placeholder="…or paste your saved memory here — one fact per line"></textarea>
+      <textarea data-paste rows="3" class="mt-2 w-full rounded-xl border-2 border-line p-3 text-base" placeholder="…or paste your saved memory here, one fact per line"></textarea>
       <button data-paste-go class="min-h-[44px] text-base font-semibold text-brand-700 hover:text-brand-800 transition">Bring in pasted text</button>
       <div data-other class="mt-2"></div>
     </div>
@@ -1733,7 +1728,7 @@ async function doReset() {
   } catch (_) {
     const err = $("#reset-error");
     if (err) {
-      err.textContent = "Sorry — that didn't work just now. Please try again.";
+      err.textContent = "That didn't work just now. Please try again.";
       err.classList.remove("hidden");
     }
   }
@@ -1755,7 +1750,7 @@ const DEMO_MEMORIES = (() => {
     {
       id: "a1",
       created_at: now - 3600,
-      text: "Dentist appointment: Dr. Berger\nMonday, July 3 at 2:00 PM — practice on the market square",
+      text: "Dentist appointment: Dr. Berger\nMonday, July 3 at 2:00 PM, practice on the market square",
       source: "mcp:claude",
     },
     {
@@ -1767,13 +1762,13 @@ const DEMO_MEMORIES = (() => {
     {
       id: "c3",
       created_at: now - day - 3600,
-      text: "Berlin trip\nArrive Friday, July 4 — return Sunday, July 6. Hotel still to book.",
+      text: "Berlin trip\nArrive Friday, July 4. Return Sunday, July 6. Hotel still to book.",
       source: "proxy:openai:gpt-4",
     },
     {
       id: "d4",
       created_at: now - 2 * day,
-      text: "Password hint for my notebook\nThird line, second word — you know the one.",
+      text: "Password hint for my notebook\nThird line, second word.",
     },
   ];
 })();
@@ -1809,7 +1804,7 @@ async function runUpdateCheck() {
     }
   } catch (_) {
     if (status) {
-      status.textContent = "Couldn't check right now — check your internet and try again.";
+      status.textContent = "Couldn't check right now. Check your internet and try again.";
       status.className = "mt-2 text-base font-medium text-red-700";
     }
   } finally {
@@ -1840,7 +1835,7 @@ function showUpdateBanner(version) {
       // On success the app downloads, verifies the signature, installs, and restarts.
       await invoke("install_update");
     } catch (_) {
-      btn.textContent = "Failed — try again later";
+      btn.textContent = "Failed. Try again later";
       btn.disabled = false;
     }
   });
