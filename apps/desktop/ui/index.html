@@ -170,7 +170,7 @@
     </div>
 
     <!-- ===================== SHELL (unlocked) ===================== -->
-    <div id="shell" class="hidden h-screen flex app-window">
+    <div id="shell" class="hidden app-shell app-window">
       <!-- Sidebar -->
       <aside class="w-64 shrink-0 bg-sidebar/90 border-r border-line/70 flex flex-col px-4 pt-10 pb-6">
         <div class="px-2 mb-8">
@@ -223,218 +223,300 @@
       </aside>
 
       <!-- Main -->
-      <main class="flex-1 min-w-0 overflow-y-auto overscroll-contain h-screen">
+      <main class="app-main">
         <!-- ===== Home ===== -->
-        <section data-screen="start" class="view px-8 py-8 max-w-[1180px] mx-auto">
-          <div class="grid gap-7 2xl:grid-cols-[minmax(0,1fr)_20rem]">
-            <div class="min-w-0">
-              <div class="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <h1 class="text-2xl font-semibold tracking-tight text-ink">Memory</h1>
-                  <p class="mt-1 text-sm text-muted">Save, find, and inspect local context.</p>
-                </div>
-                <div class="flex items-center gap-4 text-sm text-muted">
-                  <span class="inline-flex items-center gap-2"><span class="status-dot"></span>Local</span>
-                  <span>Sync off</span>
-                  <button data-home-view="einstellungen" class="text-ink hover:text-brand-700 transition">Settings</button>
-                </div>
+        <section data-screen="start" class="view tool-view">
+          <header class="tool-header">
+            <div class="tool-title-row">
+              <div>
+                <h1>Memory</h1>
+                <p>Save, find, and inspect local context.</p>
               </div>
-
-              <div class="mt-5 utility-bar">
-                <div><span>Vault</span><strong>Local</strong></div>
-                <div><span>Network</span><strong>Idle</strong></div>
-                <div><span>Sources</span><strong>Local files, agents</strong></div>
-                <div><span>Key</span><strong>This Mac</strong></div>
+              <div class="tool-actions">
+                <span class="inline-flex items-center gap-2"><span class="status-dot"></span>Local</span>
+                <span>Sync off</span>
+                <button data-home-view="einstellungen" class="text-ink hover:text-brand-700 transition">Settings</button>
               </div>
-
-              <div class="mt-5 command-bar rounded-lg p-2 flex items-center gap-3">
-                <div class="icon-cell w-10 h-10 rounded-md flex items-center justify-center shrink-0">
-                  <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5 12 3l8 3.5v10L12 21l-8-4.5v-10Z"/><path d="M12 12 4 6.5"/><path d="m12 12 8-5.5"/><path d="M12 12v9"/></svg>
-                </div>
-                <input id="remember-input" type="text" placeholder="What should I remember for you?"
-                  class="flex-1 min-w-0 bg-transparent px-2 py-3 text-base text-ink placeholder:text-muted focus:outline-none" />
-                <button id="remember-btn"
-                  class="min-h-[44px] w-12 rounded-md bg-brand-700 hover:bg-brand-800 text-white transition shrink-0 inline-flex items-center justify-center" aria-label="Remember">
-                  <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
-                </button>
-              </div>
-
-              <div class="mt-3 flex flex-wrap items-center gap-2 text-sm">
-                <span class="text-muted">Examples</span>
-                <button class="example-chip text-muted hover:text-ink underline underline-offset-4 transition" data-fill="Dentist appointment on Monday at 2 pm">Dentist, Monday 2 pm</button>
-                <button class="example-chip text-muted hover:text-ink underline underline-offset-4 transition" data-fill="Anna's birthday is on March 14">Anna's birthday is March 14</button>
-                <button class="example-chip text-muted hover:text-ink underline underline-offset-4 transition" data-fill="The house key is in the blue drawer">House key is in the blue drawer</button>
-              </div>
-
-          <!-- Recently added (hidden until the first memory exists) -->
-              <div id="recent-header" class="hidden mt-6 flex items-center justify-between">
-                <h2 class="text-lg font-semibold text-ink">Recently added</h2>
-                <button data-home-view="erinnerungen" class="home-action text-sm font-medium text-brand-700 hover:text-brand-800">View all memories</button>
-              </div>
-              <div id="timeline" class="mt-3 memory-table rounded-lg"></div>
-              <div id="start-empty" class="hidden text-center py-14">
-                <div class="mx-auto mb-4 w-16 h-16 rounded-2xl bg-brand-50 flex items-center justify-center">
-              <svg class="w-8 h-8 text-brand-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-                </div>
-                <p class="text-xl font-semibold text-ink">Nothing saved yet.</p>
-                <p class="mt-2 text-lg text-muted">Save a memory above. Newest items appear here first.</p>
-              </div>
-
-              <p class="mt-5 flex items-center gap-2 text-sm text-muted">
-                <span class="status-dot"></span>
-                <span id="home-status-text">Saved on this computer. Network is idle.</span>
-              </p>
             </div>
 
-            <aside class="detail-panel rounded-lg px-5 py-5 hidden 2xl:block">
-              <div class="flex items-center justify-between gap-3">
-                <h2 class="text-sm font-semibold text-ink">Memory details</h2>
-                <div class="flex items-center gap-1 text-muted">
-                  <button class="w-8 h-8 inline-flex items-center justify-center rounded-lg hover:bg-canvas transition" aria-label="Favorite memory"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17.5 6.8 20l1-5.8-4.2-4.1 5.8-.9L12 4l2.6 5.2 5.8.9-4.2 4.1 1 5.8-5.2-2.5Z"/></svg></button>
-                  <button class="w-8 h-8 inline-flex items-center justify-center rounded-lg hover:bg-canvas transition" aria-label="Edit memory"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m14 4 6 6"/><path d="M4 20h6L20 10l-6-6L4 14v6Z"/></svg></button>
+            <div class="mt-4 utility-bar">
+              <div><span>Vault</span><strong>Local</strong></div>
+              <div><span>Network</span><strong>Idle</strong></div>
+              <div><span>Sources</span><strong>Local files, agents</strong></div>
+              <div><span>Key</span><strong>This Mac</strong></div>
+            </div>
+
+            <div class="mt-4 command-bar rounded-lg p-2 flex items-center gap-3">
+              <div class="icon-cell w-10 h-10 rounded-md flex items-center justify-center shrink-0">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5 12 3l8 3.5v10L12 21l-8-4.5v-10Z"/><path d="M12 12 4 6.5"/><path d="m12 12 8-5.5"/><path d="M12 12v9"/></svg>
+              </div>
+              <input id="remember-input" type="text" placeholder="Remember or search local context"
+                class="flex-1 min-w-0 bg-transparent px-2 py-3 text-base text-ink placeholder:text-muted focus:outline-none" />
+              <button id="remember-btn"
+                class="min-h-[44px] w-12 rounded-md bg-brand-700 hover:bg-brand-800 text-white transition shrink-0 inline-flex items-center justify-center" aria-label="Remember">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+              </button>
+            </div>
+          </header>
+
+          <div class="tool-body">
+            <div class="workspace-grid home-grid">
+              <div class="ledger-panel">
+                <div id="recent-header" class="ledger-toolbar hidden">
+                  <div>
+                    <h2>Memory ledger</h2>
+                    <span id="start-count"></span>
+                  </div>
+                  <button data-home-view="erinnerungen" class="home-action text-sm font-medium text-brand-700 hover:text-brand-800">View all</button>
+                </div>
+                <div class="ledger-head">
+                  <span>Memory</span>
+                  <span>Source</span>
+                  <span>Type</span>
+                  <span>Time</span>
+                  <span></span>
+                </div>
+                <div id="timeline" class="ledger-table scroll-region"></div>
+                <div id="start-empty" class="hidden flex flex-1 items-center justify-center text-center px-6">
+                  <div>
+                    <p class="text-base font-semibold text-ink">No memories yet.</p>
+                    <p class="mt-2 text-sm text-muted">Use the command bar to save the first local memory.</p>
+                  </div>
                 </div>
               </div>
-              <div id="home-detail" class="mt-7"></div>
-            </aside>
+
+              <aside class="inspector rounded-lg px-5 py-5">
+                <div class="flex items-center justify-between gap-3">
+                  <h2 class="text-sm font-semibold text-ink">Memory details</h2>
+                  <div class="flex items-center gap-1 text-muted">
+                    <button class="w-8 h-8 inline-flex items-center justify-center rounded-lg hover:bg-canvas transition" aria-label="Favorite memory"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17.5 6.8 20l1-5.8-4.2-4.1 5.8-.9L12 4l2.6 5.2 5.8.9-4.2 4.1 1 5.8-5.2-2.5Z"/></svg></button>
+                    <button class="w-8 h-8 inline-flex items-center justify-center rounded-lg hover:bg-canvas transition" aria-label="Edit memory"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m14 4 6 6"/><path d="M4 20h6L20 10l-6-6L4 14v6Z"/></svg></button>
+                  </div>
+                </div>
+                <div id="home-detail" class="mt-7"></div>
+              </aside>
+            </div>
           </div>
         </section>
 
         <!-- ===== Memories ===== -->
-        <section data-screen="erinnerungen" class="view hidden px-8 py-8 max-w-5xl mx-auto">
-          <h1 class="text-2xl font-bold tracking-tight text-ink">Memories</h1>
-          <p class="text-muted mt-1">Everything Keepsake remembers for you.</p>
-          <div id="all-list" class="mt-6"></div>
-          <p id="all-empty" class="hidden text-center text-sm text-muted py-12">No memories yet.</p>
+        <section data-screen="erinnerungen" class="view tool-view hidden">
+          <header class="tool-header">
+            <div class="tool-title-row">
+              <div>
+                <h1>Memories</h1>
+                <p>Everything Keepsake remembers in this local vault.</p>
+              </div>
+            </div>
+          </header>
+          <div class="tool-body">
+            <div class="ledger-panel">
+              <div class="ledger-toolbar">
+                <h2>All memories</h2>
+                <span id="all-count"></span>
+              </div>
+              <div class="ledger-head">
+                <span>Memory</span>
+                <span>Source</span>
+                <span>Type</span>
+                <span>Time</span>
+                <span></span>
+              </div>
+              <div id="all-list" class="ledger-table scroll-region"></div>
+              <p id="all-empty" class="hidden flex flex-1 items-center justify-center text-center text-sm text-muted">No memories yet.</p>
+            </div>
+          </div>
         </section>
 
         <!-- ===== Sources ===== -->
-        <section data-screen="quellen" class="view hidden px-8 py-8 max-w-6xl mx-auto">
-          <div class="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 class="text-2xl font-semibold tracking-tight text-ink">Bring your context together</h1>
-              <p class="mt-1 text-sm text-muted">Local sources work now. Cloud sources stay planned until you explicitly connect them.</p>
-            </div>
-            <button id="sources-refresh" class="min-h-[40px] rounded-lg border border-line bg-surface px-3 text-sm font-medium text-ink hover:bg-canvas transition">Refresh</button>
-          </div>
-          <div>
-            <h2 class="mt-6 text-sm font-semibold text-ink">Recommended starters</h2>
-            <div id="connector-starters" class="mt-3 memory-table rounded-2xl"></div>
-          </div>
-          <div class="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
-            <div>
-              <div class="flex items-center justify-between gap-3">
-                <h2 class="text-sm font-semibold text-ink">All sources</h2>
-                <span id="connector-count" class="text-sm text-muted"></span>
+        <section data-screen="quellen" class="view tool-view hidden">
+          <header class="tool-header">
+            <div class="tool-title-row">
+              <div>
+                <h1>Sources</h1>
+                <p>Connect local context deliberately. Cloud sources stay planned until you act.</p>
               </div>
-              <div id="connector-list" class="mt-3 memory-table rounded-2xl"></div>
+              <div class="tool-actions">
+                <span id="connector-count"></span>
+                <button id="sources-refresh" class="min-h-[36px] rounded-md border border-line bg-surface px-3 text-sm font-medium text-ink hover:bg-canvas transition">Refresh</button>
+              </div>
             </div>
-            <aside class="pane rounded-2xl p-5">
-              <h2 class="text-sm font-semibold text-ink">Documents</h2>
-              <p class="mt-1 text-sm text-muted">Recent memories grouped by their source.</p>
-              <div id="document-list" class="mt-4 space-y-2"></div>
-            </aside>
+          </header>
+          <div class="tool-body">
+            <div class="workspace-grid source-grid">
+              <div class="ledger-panel">
+                <div class="ledger-toolbar">
+                  <h2>Integration list</h2>
+                  <span>Local first. No background network.</span>
+                </div>
+                <div class="source-head">
+                  <span>Source</span>
+                  <span>Type</span>
+                  <span>Status</span>
+                  <span>Last activity</span>
+                  <span>Action</span>
+                </div>
+                <div id="connector-list" class="ledger-table scroll-region"></div>
+              </div>
+              <aside class="inspector rounded-lg p-5">
+                <h2 class="text-sm font-semibold text-ink">Documents</h2>
+                <p class="mt-1 text-sm text-muted">Recent imported context by source.</p>
+                <div id="document-list" class="mt-4 scroll-region space-y-0"></div>
+              </aside>
+            </div>
           </div>
         </section>
 
         <!-- ===== Agents ===== -->
-        <section data-screen="agents" class="view hidden px-8 py-8 max-w-5xl mx-auto">
-          <div class="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 class="text-2xl font-bold tracking-tight text-ink">Connect an assistant</h1>
-              <p class="mt-1 text-muted">Your assistant gets a scoped local pass. Your 24 words are never copied into a client.</p>
-            </div>
-          </div>
-          <div id="agent-clients" class="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"></div>
-          <div class="mt-6 pane rounded-2xl p-5">
-            <div class="flex items-start justify-between gap-4">
+        <section data-screen="agents" class="view tool-view hidden">
+          <header class="tool-header">
+            <div class="tool-title-row">
               <div>
-                <h2 id="agent-setup-title" class="text-lg font-semibold text-ink">Codex setup</h2>
-                <p class="mt-1 text-sm text-muted">Run these locally. Keepsake serves one shared encrypted vault.</p>
+                <h1>Connect an assistant</h1>
+                <p>Your assistant gets a scoped local pass. Your 24 words stay out of clients.</p>
               </div>
-              <button id="agent-copy-all" class="min-h-[40px] rounded-lg border border-line px-3 text-sm font-medium text-ink hover:bg-canvas transition">Copy all</button>
             </div>
-            <div id="agent-setup-steps" class="mt-5 space-y-3"></div>
+          </header>
+          <div class="tool-body">
+            <div class="workspace-grid agents-grid">
+              <div class="ledger-panel">
+                <div class="ledger-toolbar">
+                  <h2>Client</h2>
+                </div>
+                <div id="agent-clients" class="scroll-region p-3 grid gap-2"></div>
+              </div>
+              <div class="ledger-panel">
+                <div class="ledger-toolbar">
+                  <div>
+                    <h2 id="agent-setup-title">Codex setup</h2>
+                    <span>Run locally. Keepsake serves one shared vault.</span>
+                  </div>
+                  <button id="agent-copy-all" class="min-h-[36px] rounded-md border border-line px-3 text-sm font-medium text-ink hover:bg-canvas transition">Copy all</button>
+                </div>
+                <div id="agent-setup-steps" class="scroll-region p-4 space-y-3"></div>
+              </div>
+            </div>
           </div>
         </section>
 
         <!-- ===== Profile ===== -->
-        <section data-screen="profile" class="view hidden px-8 py-8 max-w-4xl mx-auto">
-          <div class="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h1 class="text-2xl font-bold tracking-tight text-ink">What Keepsake knows</h1>
-              <p class="mt-1 text-muted">A local summary assistants can read before digging into specific memories.</p>
+        <section data-screen="profile" class="view tool-view hidden">
+          <header class="tool-header">
+            <div class="tool-title-row">
+              <div>
+                <h1>Profile audit</h1>
+                <p>Facts, sources, conflicts, and stale context built locally from memory.</p>
+              </div>
+              <div class="tool-actions">
+                <button id="profile-redistill" class="min-h-[36px] rounded-md bg-brand-700 px-3 text-sm font-semibold text-white hover:bg-brand-800 transition">Rebuild</button>
+                <button id="profile-clear" class="min-h-[36px] rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Clear</button>
+              </div>
             </div>
-            <div class="flex gap-2">
-              <button id="profile-redistill" class="min-h-[44px] rounded-xl bg-brand-700 px-4 text-sm font-semibold text-white hover:bg-brand-800 transition">Rebuild</button>
-              <button id="profile-clear" class="min-h-[44px] rounded-xl border-2 border-line bg-surface px-4 text-sm font-semibold text-ink hover:bg-canvas transition">Clear</button>
+          </header>
+          <div class="tool-body">
+            <div class="workspace-grid profile-grid">
+              <div class="ledger-panel">
+                <div class="ledger-toolbar">
+                  <h2>Fact audit</h2>
+                  <span>Local summary, editable by rebuild or clear.</span>
+                </div>
+                <div id="profile-text" class="scroll-region"></div>
+              </div>
+              <aside class="inspector rounded-lg p-5">
+                <h2 class="text-sm font-semibold text-ink">Sources</h2>
+                <p id="profile-count" class="mt-1 text-sm text-muted"></p>
+                <div id="profile-sources" class="mt-4 space-y-2"></div>
+              </aside>
             </div>
-          </div>
-          <div class="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
-            <div class="pane rounded-2xl p-5">
-              <h2 class="text-lg font-semibold text-ink">Profile</h2>
-              <pre id="profile-text" class="mt-4 whitespace-pre-wrap text-sm leading-6 text-ink font-sans"></pre>
-            </div>
-            <aside class="pane rounded-2xl p-5">
-              <h2 class="text-lg font-semibold text-ink">Sources</h2>
-              <p id="profile-count" class="mt-1 text-sm text-muted"></p>
-              <div id="profile-sources" class="mt-4 space-y-2"></div>
-            </aside>
           </div>
         </section>
 
         <!-- ===== Search ===== -->
-        <section data-screen="suchen" class="view hidden px-8 py-10 max-w-3xl mx-auto">
-          <div class="text-center mb-6">
-            <h1 class="text-3xl font-bold tracking-tight text-ink">Find a memory</h1>
-              <p class="mt-2 text-lg text-muted">Ask in your own words. Keepsake finds related local memories.</p>
+        <section data-screen="suchen" class="view tool-view hidden">
+          <header class="tool-header">
+            <div class="tool-title-row">
+              <div>
+                <h1>Search</h1>
+                <p>Query local memory with a chosen recall mode.</p>
+              </div>
+            </div>
+            <div class="mt-4 command-bar rounded-lg p-2 flex items-center gap-3">
+              <svg class="ml-2 w-5 h-5 text-muted shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input id="search-input" type="text" placeholder="Search local memory"
+                class="flex-1 min-w-0 bg-transparent px-2 py-3 text-base text-ink placeholder:text-muted focus:outline-none" />
+              <button id="search-clear" class="hidden inline-flex items-center justify-center w-9 h-9 rounded-md text-muted hover:bg-canvas hover:text-ink transition" aria-label="Clear search">
+                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </button>
+            </div>
+            <div id="search-modes" class="mt-3 flex flex-wrap gap-2">
+              <button data-search-mode="balanced" class="search-mode min-h-[34px] rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Balanced</button>
+              <button data-search-mode="hybrid" class="search-mode min-h-[34px] rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Hybrid</button>
+              <button data-search-mode="recent" class="search-mode min-h-[34px] rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Recent</button>
+              <button data-search-mode="semantic" class="search-mode min-h-[34px] rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Semantic</button>
+              <button data-search-mode="graph_first" class="search-mode min-h-[34px] rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Graph</button>
+            </div>
+          </header>
+          <div class="tool-body">
+            <div class="ledger-panel">
+              <div class="ledger-toolbar">
+                <h2>Results</h2>
+                <span id="search-result-count">Type to search</span>
+              </div>
+              <div class="search-head">
+                <span>Result</span>
+                <span>Type</span>
+                <span>Source</span>
+                <span>Mode</span>
+              </div>
+              <ul id="search-results" class="ledger-table scroll-region"></ul>
+              <div id="search-empty" class="hidden scroll-region"></div>
+            </div>
           </div>
-          <div class="relative">
-            <svg class="absolute left-4 top-1/2 -translate-y-1/2 w-6 h-6 text-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-            <input id="search-input" type="text" placeholder="Type a question, like: when is my doctor's appointment?"
-              class="w-full rounded-2xl border border-line bg-surface pl-12 pr-12 py-4 text-lg text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400" />
-            <button id="search-clear" class="hidden absolute right-3 top-1/2 -translate-y-1/2 inline-flex items-center justify-center w-9 h-9 rounded-lg text-muted hover:bg-canvas hover:text-ink transition">
-              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-            </button>
-          </div>
-          <div id="search-modes" class="mt-3 flex flex-wrap justify-center gap-2">
-            <button data-search-mode="balanced" class="search-mode min-h-[40px] rounded-xl border-2 border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Balanced</button>
-            <button data-search-mode="hybrid" class="search-mode min-h-[40px] rounded-xl border-2 border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Hybrid</button>
-            <button data-search-mode="recent" class="search-mode min-h-[40px] rounded-xl border-2 border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Recent</button>
-            <button data-search-mode="semantic" class="search-mode min-h-[40px] rounded-xl border-2 border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Semantic</button>
-            <button data-search-mode="graph_first" class="search-mode min-h-[40px] rounded-xl border-2 border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Graph</button>
-          </div>
-          <!-- Example questions: tap to run -->
-          <div id="search-examples" class="mt-4 flex flex-wrap justify-center gap-2">
-            <button class="search-chip min-h-[40px] rounded-lg border border-line bg-surface px-3 text-sm text-ink hover:bg-canvas transition" data-q="What appointments do I have?">Appointments</button>
-            <button class="search-chip min-h-[40px] rounded-lg border border-line bg-surface px-3 text-sm text-ink hover:bg-canvas transition" data-q="When is my trip?">Trip dates</button>
-            <button class="search-chip min-h-[40px] rounded-lg border border-line bg-surface px-3 text-sm text-ink hover:bg-canvas transition" data-q="What did I save about my medicine?">Medicine</button>
-          </div>
-          <ul id="search-results" class="mt-6 space-y-3"></ul>
-          <div id="search-empty" class="hidden"></div>
         </section>
 
         <!-- ===== Settings ===== -->
-        <section data-screen="einstellungen" class="view hidden px-8 py-8 max-w-2xl mx-auto">
-          <h1 class="text-3xl font-bold tracking-tight text-ink">Settings</h1>
-          <div class="mt-6 space-y-4">
+        <section data-screen="einstellungen" class="view tool-view hidden">
+          <header class="tool-header">
+            <div class="tool-title-row">
+              <div>
+                <h1>Settings</h1>
+                <p>Control local access, import, recovery, sync, and app behavior.</p>
+              </div>
+            </div>
+          </header>
+          <div class="tool-body">
+            <div class="workspace-grid settings-grid">
+              <aside class="settings-rail">
+                <a href="#settings-vault">Vault <span id="set-count-rail" class="text-xs text-soft"></span></a>
+                <a href="#settings-import">Import</a>
+                <a href="#settings-appearance">Appearance</a>
+                <a href="#settings-key">Key</a>
+                <a href="#settings-unlock">Unlock</a>
+                <a href="#settings-recovery">Recovery</a>
+                <a href="#settings-sync">Sync</a>
+                <a href="#settings-backup">Backup</a>
+                <a href="#settings-updates">Updates</a>
+              </aside>
+              <div class="scroll-region">
+                <div class="settings-list">
             <!-- Your memories -->
-            <div class="pane rounded-2xl p-5">
+            <div id="settings-vault" class="pane rounded-2xl p-5">
               <div class="flex items-center justify-between">
                 <span class="text-lg text-ink">Memories saved</span>
                 <span id="set-count" class="text-lg font-bold text-ink">–</span>
               </div>
-              <p class="mt-3 flex items-start gap-2 text-base font-medium text-brand-800"><span class="mt-2 w-2.5 h-2.5 rounded-full bg-brand-500 shrink-0"></span> <span>Private. These memories are locked with your local key.</span></p>
+              <p class="mt-3 flex items-start gap-2 text-base text-muted"><span class="mt-2 w-2 h-2 rounded-full bg-brand-500 shrink-0"></span> <span>Stored in this local vault. Network stays idle until you press a network action.</span></p>
             </div>
 
             <!-- Bring your memories in (import from other AI systems) -->
-            <div class="pane rounded-2xl p-5">
+            <div id="settings-import" class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Bring your memories in</h2>
               <p class="mt-1 text-base text-muted">Switching from another AI? Pull the memory you already built up. It is deduplicated locally and stays on this computer.</p>
               <button id="import-open" class="mt-3 min-h-[48px] inline-flex items-center rounded-xl border-2 border-line px-5 text-base font-semibold text-ink hover:bg-canvas transition">Import memories</button>
             </div>
 
             <!-- Appearance (light / dark / system) -->
-            <div class="pane rounded-2xl p-5">
+            <div id="settings-appearance" class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Appearance</h2>
               <p class="mt-1 text-base text-muted">Light, dark, or follow your Mac.</p>
               <div class="mt-3 inline-flex rounded-xl border-2 border-line overflow-hidden" role="group" aria-label="Theme">
@@ -445,7 +527,7 @@
             </div>
 
             <!-- Your 24 words (reveal, like a wallet) -->
-            <div class="pane rounded-2xl p-5">
+            <div id="settings-key" class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Your 24 words</h2>
               <p class="mt-1 text-base text-muted">These open your memories. Keep them private — and write them on paper if you haven't yet.</p>
               <button id="reveal-seed-btn" class="mt-3 min-h-[48px] inline-flex items-center gap-2 rounded-xl border-2 border-line px-5 text-base font-semibold text-ink hover:bg-canvas transition">
@@ -460,7 +542,7 @@
             </div>
 
             <!-- Quick unlock (PIN) -->
-            <div class="pane rounded-2xl p-5">
+            <div id="settings-unlock" class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Quick unlock</h2>
               <p class="mt-1 text-base text-muted">Open Keepsake with a short PIN instead of typing all 24 words every time. Your 24 words still work, and stay your master backup.</p>
 
@@ -489,7 +571,7 @@
             </div>
 
             <!-- Your safety net (social recovery) -->
-            <div class="pane rounded-2xl p-5">
+            <div id="settings-recovery" class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Your safety net</h2>
               <p class="mt-1 text-base text-muted">Give a sealed piece of your key to 2–3 people you trust. If you ever lose your words, any two of them together can bring your memories back. None of them can ever read your memories.</p>
               <p id="safetynet-status" class="mt-2 text-base font-medium text-amber-700">Not set up yet.</p>
@@ -497,7 +579,7 @@
             </div>
 
             <!-- Your other devices (sync) -->
-            <div class="pane rounded-2xl p-5 space-y-3">
+            <div id="settings-sync" class="pane rounded-2xl p-5 space-y-3">
               <div>
                 <h2 class="text-lg font-semibold text-ink">Your other devices</h2>
                 <p class="mt-1 text-base text-muted">Off by default. Your notes stay only here. When on, your devices share the same notes privately: the place in the middle can never read them.</p>
@@ -515,7 +597,7 @@
             </div>
 
             <!-- A safe copy (encrypted backup) -->
-            <div class="pane rounded-2xl p-5">
+            <div id="settings-backup" class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">A safe copy</h2>
               <p class="mt-1 text-base text-muted">Keep an encrypted copy online, so if this computer is ever lost or breaks, you can get all your memories back on a new one. We can never read it.</p>
               <p id="backup-status" class="mt-2 text-base font-medium text-amber-700">Off.</p>
@@ -526,7 +608,7 @@
             </div>
 
             <!-- Updates (manual + honest: no automatic network call on startup) -->
-            <div class="pane rounded-2xl p-5">
+            <div id="settings-updates" class="pane rounded-2xl p-5">
               <h2 class="text-lg font-semibold text-ink">Updates</h2>
               <p class="mt-1 text-base text-muted">Keepsake never phones home. The only time it reaches the internet for updates is when you press this button.</p>
               <p id="update-status" class="mt-2 text-base font-medium text-muted hidden"></p>
@@ -554,15 +636,22 @@
             <div class="pt-2 text-center">
               <button id="settings-startover" class="min-h-[44px] text-base font-medium text-muted hover:text-red-700 underline underline-offset-2">Start over with a new, empty Keepsake</button>
             </div>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
-        <section data-screen="map" class="view hidden h-full flex flex-col">
-          <header class="px-8 pt-10 pb-3 shrink-0">
-            <h1 class="text-2xl font-bold tracking-tight text-ink">Your memory map</h1>
-            <p class="text-sm text-muted mt-1">Each dot is a memory. Memories about the same thing sit together — click a dot to read it.</p>
+        <section data-screen="map" class="view tool-view hidden">
+          <header class="tool-header">
+            <div class="tool-title-row">
+              <div>
+                <h1>Memory map</h1>
+                <p>Each dot is a memory. Related items sit together.</p>
+              </div>
+            </div>
           </header>
-          <div class="relative flex-1 min-h-0">
+          <div class="relative flex-1 min-h-0 overflow-hidden">
             <canvas id="map-canvas" class="absolute inset-0 w-full h-full"></canvas>
 
             <!-- floating controls -->

@@ -119,17 +119,19 @@ function cardHtml(mem) {
   const desc = nl === -1 ? "" : text.slice(nl + 1).trim();
   const icon = TRAVEL_RE.test(text) ? ICON_PLANE : ICON_NOTE;
   const src = sourceLabel(mem.source);
+  const type = TRAVEL_RE.test(text) ? "Travel" : "Memory";
   return `
-    <div data-card="${mem.id}" data-text="${escapeHtml(title)}" class="memory-table-row row-surface group px-4 py-3 flex items-center gap-3 cursor-pointer">
-      <span class="icon-cell w-10 h-10 rounded-xl flex items-center justify-center shrink-0">${icon}</span>
-      <div class="min-w-0 flex-1">
-        <div class="font-medium text-ink text-[14px] truncate">${escapeHtml(title)}</div>
-        <div class="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
-          ${desc ? `<span class="truncate max-w-[18rem]">${escapeHtml(desc)}</span><span>·</span>` : ""}
-          <span>${src ? escapeHtml(src) : "added here"}</span>
+    <div data-card="${mem.id}" data-text="${escapeHtml(title)}" class="memory-table-row row-surface memory-ledger-row group px-4 py-3 cursor-pointer">
+      <div class="min-w-0 flex items-center gap-3">
+        <span class="icon-cell w-9 h-9 rounded-lg flex items-center justify-center shrink-0">${icon}</span>
+        <div class="min-w-0">
+          <div class="font-medium text-ink text-[14px] truncate">${escapeHtml(title)}</div>
+          ${desc ? `<div class="mt-1 text-xs text-muted truncate">${escapeHtml(desc)}</div>` : ""}
         </div>
       </div>
-      <span class="text-xs text-muted tabular-nums shrink-0">${fmtTime(mem.created_at)}</span>
+      <span class="ledger-optional text-xs text-muted truncate">${src ? escapeHtml(src) : "added here"}</span>
+      <span class="ledger-optional text-xs text-muted">${escapeHtml(type)}</span>
+      <span class="ledger-optional text-xs text-muted tabular-nums">${fmtTime(mem.created_at)}</span>
       <button data-forget="${mem.id}" aria-label="Remove this memory" class="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-lg text-muted hover:bg-red-50 hover:text-red-600 transition">${ICON_TRASH}</button>
     </div>`;
 }
@@ -192,6 +194,7 @@ function renderTimeline(memories) {
   const el = $("#timeline");
   const has = memories.length > 0;
   $("#start-empty").classList.toggle("hidden", has);
+  el.classList.toggle("hidden", !has);
   const rh = $("#recent-header");
   if (rh) rh.classList.toggle("hidden", !has);
   const startCount = $("#start-count");
@@ -230,10 +233,12 @@ function renderTimeline(memories) {
 
 function renderAll(memories) {
   const el = $("#all-list");
-  $("#all-empty").classList.toggle("hidden", memories.length > 0);
-  el.classList.toggle("memory-table", memories.length > 0);
-  el.classList.toggle("rounded-2xl", memories.length > 0);
+  const has = memories.length > 0;
+  $("#all-empty").classList.toggle("hidden", has);
+  el.classList.toggle("hidden", !has);
   el.innerHTML = memories.map((m) => cardHtml(m)).join("");
+  const count = $("#all-count");
+  if (count) count.textContent = countLabel(memories.length);
   wireMemoryRows(el, memories);
 }
 
@@ -297,6 +302,10 @@ function renderHomeDetail(mem) {
 async function refresh() {
   if (DEMO) {
     SETTINGS_COUNT = DEMO_MEMORIES.length;
+    const setCount = $("#set-count");
+    if (setCount) setCount.textContent = String(SETTINGS_COUNT);
+    const setCountRail = $("#set-count-rail");
+    if (setCountRail) setCountRail.textContent = String(SETTINGS_COUNT);
     renderTimeline(DEMO_MEMORIES);
     renderAll(DEMO_MEMORIES);
     refreshSources();
@@ -307,6 +316,8 @@ async function refresh() {
     const st = await invoke("status");
     SETTINGS_COUNT = st.memories;
     $("#set-count").textContent = String(st.memories);
+    const setCountRail = $("#set-count-rail");
+    if (setCountRail) setCountRail.textContent = String(st.memories);
   } catch (_) {}
   try {
     renderTimeline(await invoke("recent", { limit: 6 }));
@@ -366,10 +377,9 @@ function demoDocuments() {
 }
 
 async function refreshSources() {
-  const starters = $("#connector-starters");
   const list = $("#connector-list");
   const docs = $("#document-list");
-  if (!starters || !list || !docs) return;
+  if (!list || !docs) return;
   let connectors = [];
   let documents = [];
   if (DEMO || !invoke) {
@@ -380,12 +390,6 @@ async function refreshSources() {
     try { documents = await invoke("documents_list", { source: null, limit: 24 }); } catch (_) { documents = []; }
   }
   $("#connector-count").textContent = connectors.length ? `${connectors.length} sources` : "";
-  const starterIds = ["claude-code", "local-folder", "mcp-agents"];
-  starters.innerHTML = starterIds
-    .map((id) => connectors.find((c) => c.id === id))
-    .filter(Boolean)
-    .map(renderConnectorCard)
-    .join("");
   list.innerHTML = connectors.map(renderConnectorRow).join("");
   renderDocuments(documents);
   document.querySelectorAll("[data-connector-action]").forEach((b) =>
@@ -410,16 +414,20 @@ function renderConnectorCard(c) {
 }
 function renderConnectorRow(c) {
   const count = c.memory_count ? `${c.memory_count} ${c.memory_count === 1 ? "memory" : "memories"}` : c.network ? "Needs explicit connect" : "Ready";
+  const last = c.last_imported_at ? fmtTime(c.last_imported_at) : c.network ? "Not connected" : "Ready";
   return `
-    <button data-connector-action="${escapeHtml(c.id)}" class="memory-table-row row-surface w-full px-4 py-3 text-left">
-      <div class="flex items-center gap-3">
-        <span class="icon-cell w-10 h-10 rounded-xl flex items-center justify-center text-xs font-semibold shrink-0">${escapeHtml(connectorInitial(c.title))}</span>
-        <span class="min-w-0 flex-1">
+    <button data-connector-action="${escapeHtml(c.id)}" class="memory-table-row row-surface source-row w-full px-4 py-3 text-left grid gap-3 items-center md:grid-cols-[minmax(12rem,1fr)_7rem_6.5rem_8rem_7rem]">
+      <span class="min-w-0 flex items-center gap-3">
+        <span class="icon-cell w-9 h-9 rounded-lg flex items-center justify-center text-xs font-semibold shrink-0">${escapeHtml(connectorInitial(c.title))}</span>
+        <span class="min-w-0">
           <span class="block text-sm font-semibold text-ink truncate">${escapeHtml(c.title)}</span>
-          <span class="block text-xs text-muted truncate">${escapeHtml(c.category)} · ${escapeHtml(count)}</span>
+          <span class="block text-xs text-muted truncate">${escapeHtml(c.description)}</span>
         </span>
-        <span class="inline-flex rounded-md border px-2.5 py-1 text-xs font-semibold ${statusClass(c.status)}">${statusLabel(c.status)}</span>
-      </div>
+      </span>
+      <span class="hidden md:block text-xs text-muted">${escapeHtml(c.category)}</span>
+      <span class="inline-flex w-fit rounded-md border px-2 py-1 text-xs font-semibold ${statusClass(c.status)}">${statusLabel(c.status)}</span>
+      <span class="hidden md:block text-xs text-muted">${escapeHtml(last)}</span>
+      <span class="hidden md:block text-xs font-medium text-ink">${escapeHtml(c.primary_action || count)}</span>
     </button>`;
 }
 function renderDocuments(documents) {
@@ -430,7 +438,7 @@ function renderDocuments(documents) {
     return;
   }
   docs.innerHTML = documents.slice(0, 12).map((d) => `
-    <div class="rounded-lg border border-line bg-canvas/50 px-3 py-2">
+    <div class="border-t border-line first:border-t-0 py-3">
       <div class="text-sm font-semibold text-ink truncate">${escapeHtml(d.title || "Untitled memory")}</div>
       <div class="mt-0.5 text-xs text-muted truncate">${escapeHtml(d.source_label || sourceLabel(d.source) || "Unknown source")}</div>
       <p class="mt-1 text-xs text-muted line-clamp-2">${escapeHtml(d.preview || "")}</p>
@@ -473,9 +481,9 @@ function renderAgents() {
   const clients = $("#agent-clients");
   if (!clients) return;
   clients.innerHTML = AGENT_CLIENTS.map((c) => `
-    <button data-agent-client="${c.id}" class="min-h-[84px] rounded-xl border ${ACTIVE_AGENT_CLIENT === c.id ? "border-brand-300 bg-brand-50 text-brand-800" : "border-line bg-surface text-ink"} p-4 text-left hover:bg-canvas transition">
-      <div class="text-xs text-muted">${escapeHtml(connectorInitial(c.title))}</div>
-      <div class="mt-2 text-sm font-semibold">${escapeHtml(c.title)}</div>
+    <button data-agent-client="${c.id}" class="min-h-[46px] rounded-md border ${ACTIVE_AGENT_CLIENT === c.id ? "border-brand-300 bg-brand-50 text-brand-800" : "border-line bg-surface text-ink"} px-3 py-2 text-left hover:bg-canvas transition flex items-center gap-3">
+      <span class="icon-cell w-8 h-8 rounded-md flex items-center justify-center text-xs font-semibold shrink-0">${escapeHtml(connectorInitial(c.title))}</span>
+      <span class="text-sm font-semibold truncate">${escapeHtml(c.title)}</span>
     </button>`).join("");
   clients.querySelectorAll("[data-agent-client]").forEach((b) => b.addEventListener("click", () => {
     ACTIVE_AGENT_CLIENT = b.dataset.agentClient;
@@ -489,8 +497,8 @@ function renderAgentSteps() {
   const host = $("#agent-setup-steps");
   if (!host) return;
   host.innerHTML = setup.steps.map(([label, command], i) => `
-    <div class="grid gap-3 rounded-xl border border-line bg-canvas/70 p-3 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-center">
-      <div class="w-8 h-8 rounded-lg bg-surface border border-line flex items-center justify-center text-sm font-semibold text-ink">${i + 1}</div>
+    <div class="grid gap-3 rounded-lg border border-line bg-canvas/70 p-3 sm:grid-cols-[2rem_minmax(0,1fr)_auto] sm:items-center">
+      <div class="w-8 h-8 rounded-md bg-surface border border-line flex items-center justify-center text-sm font-semibold text-ink">${i + 1}</div>
       <div>
         <div class="text-sm font-semibold text-ink">${escapeHtml(label)}</div>
         <code class="mt-1 block rounded-lg bg-surface border border-line px-3 py-2 text-sm text-ink overflow-x-auto">${escapeHtml(command)}</code>
@@ -524,16 +532,61 @@ async function refreshProfile() {
     try { profile = await invoke("profile_get"); } catch (_) { profile = null; }
   }
   if (!profile) return;
-  text.textContent = profile.text || "No profile yet. Rebuild it locally from your recent memories.";
+  text.innerHTML = renderProfileAudit(profile);
   $("#profile-count").textContent = `${profile.memory_count || 0} memories sampled`;
   const src = $("#profile-sources");
   if (src) {
     src.innerHTML = (profile.sources || []).map(([label, count]) => `
-      <div class="flex items-center justify-between gap-3 rounded-xl border border-line bg-canvas px-3 py-2 text-sm">
+      <div class="flex items-center justify-between gap-3 border-t border-line first:border-t-0 py-2 text-sm">
         <span class="text-ink truncate">${escapeHtml(label)}</span>
         <span class="font-semibold text-muted">${count}</span>
       </div>`).join("") || `<p class="text-sm text-muted">No sources yet.</p>`;
   }
+}
+function renderProfileAudit(profile) {
+  const raw = profile.text || "";
+  const rows = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"))
+    .map((line) => line.replace(/^-+\s*/, ""))
+    .filter(Boolean)
+    .map((line) => {
+      const cut = line.indexOf(":");
+      if (cut > 0) {
+        return {
+          label: line.slice(0, cut),
+          value: line.slice(cut + 1).trim() || "Available",
+          type: "Profile",
+        };
+      }
+      return { label: "Profile note", value: line, type: "Local" };
+    });
+  if (!rows.length) {
+    rows.push({
+      label: "Profile",
+      value: "No profile yet. Rebuild it locally from recent memories.",
+      type: "Empty",
+    });
+  }
+  rows.push(
+    { label: "Conflicts", value: "Not tracked in this build", type: "Audit" },
+    { label: "Stale facts", value: "Use Rebuild to refresh from current memory", type: "Audit" },
+  );
+  return `
+    <div class="grid grid-cols-[minmax(10rem,1fr)_minmax(12rem,1.4fr)_7rem] gap-3 px-4 py-2 border-b border-line text-xs font-semibold text-soft">
+      <span>Fact</span><span>Value</span><span>Type</span>
+    </div>
+    ${rows
+      .map(
+        (row) => `
+      <div class="profile-row grid grid-cols-[minmax(10rem,1fr)_minmax(12rem,1.4fr)_7rem] gap-3 px-4 py-3 text-sm">
+        <span class="font-medium text-ink">${escapeHtml(row.label)}</span>
+        <span class="text-muted">${escapeHtml(row.value)}</span>
+        <span class="text-soft">${escapeHtml(row.type)}</span>
+      </div>`,
+      )
+      .join("")}`;
 }
 async function redistillProfile() {
   if (DEMO || !invoke) return refreshProfile();
@@ -661,18 +714,16 @@ function renderHit(h) {
   const icon = TRAVEL_RE.test(h.text) ? ICON_PLANE : ICON_NOTE;
   const oneLine = h.text.replace(/\s*\n\s*/g, " · ");
   const src = sourceLabel(h.source);
+  const type = TRAVEL_RE.test(h.text) ? "Travel" : "Memory";
   return `
-    <li class="row-surface rounded-xl px-4 py-3 flex items-center gap-3">
-      <span class="icon-cell w-10 h-10 rounded-xl flex items-center justify-center shrink-0">${icon}</span>
-      <div class="min-w-0 flex-1">
-        <div class="text-sm font-medium text-ink truncate">${escapeHtml(oneLine)}</div>
-        <div class="mt-1 flex items-center gap-2 text-xs text-muted">
-          <span>Memory</span>
-          <span>${escapeHtml(SEARCH_MODE.replace("_", " "))}</span>
-          ${src ? `<span>· ${escapeHtml(src)}</span>` : ""}
-        </div>
+    <li class="search-row row-surface grid gap-3 items-center px-4 py-3 md:grid-cols-[minmax(14rem,1fr)_7rem_8rem_5rem]">
+      <div class="min-w-0 flex items-center gap-3">
+        <span class="icon-cell w-9 h-9 rounded-lg flex items-center justify-center shrink-0">${icon}</span>
+        <span class="text-sm font-medium text-ink truncate">${escapeHtml(oneLine)}</span>
       </div>
-      <svg class="w-5 h-5 text-muted shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+      <span class="hidden md:block text-xs text-muted">${escapeHtml(type)}</span>
+      <span class="hidden md:block text-xs text-muted truncate">${src ? escapeHtml(src) : "added here"}</span>
+      <span class="hidden md:block text-xs text-muted">${escapeHtml(SEARCH_MODE.replace("_", " "))}</span>
     </li>`;
 }
 
@@ -684,6 +735,8 @@ async function doSearch() {
   const results = $("#search-results");
   if (!q) {
     results.innerHTML = "";
+    const count = $("#search-result-count");
+    if (count) count.textContent = "Type to search";
     if (examples) examples.classList.remove("hidden");
     if (empty) empty.classList.add("hidden");
     return;
@@ -703,9 +756,13 @@ async function doSearch() {
   }
   if (hits.length) {
     if (empty) empty.classList.add("hidden");
+    const count = $("#search-result-count");
+    if (count) count.textContent = countLabel(hits.length);
     results.innerHTML = hits.map(renderHit).join("");
   } else {
     results.innerHTML = "";
+    const count = $("#search-result-count");
+    if (count) count.textContent = "No result";
     await showNoResult(q);
   }
 }
@@ -723,12 +780,12 @@ async function showNoResult(q) {
   }
   empty.classList.remove("hidden");
   empty.innerHTML = `
-    <div class="text-center py-8">
-      <p class="text-xl font-semibold text-ink">I couldn't find anything for that.</p>
-      <p class="mt-2 text-lg text-muted">Try simpler words — like just a name or a place.</p>
-      <button id="save-as-memory" class="mt-5 inline-flex min-h-[48px] items-center rounded-xl bg-brand-700 px-5 text-lg font-semibold text-white hover:bg-brand-800 transition">Save “${escapeHtml(q)}” as a new memory</button>
+    <div class="px-4 py-5 border-b border-line">
+      <p class="text-sm font-semibold text-ink">No matching memory.</p>
+      <p class="mt-1 text-sm text-muted">Try a shorter query, or save this as a new memory.</p>
+      <button id="save-as-memory" class="mt-4 inline-flex min-h-[38px] items-center rounded-md bg-brand-700 px-3 text-sm font-semibold text-white hover:bg-brand-800 transition">Save “${escapeHtml(q)}”</button>
     </div>
-    ${recent.length ? `<div class="mt-2"><p class="text-base font-semibold text-ink mb-3">Your most recent memories:</p><ul class="space-y-3">${recent.map(renderHit).join("")}</ul></div>` : ""}`;
+    ${recent.length ? `<div><div class="px-4 py-2 text-xs font-semibold text-soft border-b border-line">Recent memories</div><ul>${recent.map(renderHit).join("")}</ul></div>` : ""}`;
   const save = $("#save-as-memory");
   if (save)
     save.addEventListener("click", () => {

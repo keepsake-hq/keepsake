@@ -17,6 +17,12 @@ A user opens Keepsake on a laptop in normal daylight to save, search, import, or
 - Agent setup should use client tiles, numbered steps, and copyable command blocks.
 - Search results should show source/type clearly so the user knows where a memory came from.
 
+## App-Raum Rule
+- No website scroll feeling: the unlocked desktop app uses the visible window height as a fixed tool space.
+- Sidebar, header, command bars, and tool controls stay fixed inside each view.
+- Only concrete work regions scroll: memory ledgers, source lists, search results, profile audit lists, map details, and inspectors.
+- Avoid vertically stacked landing-page sections. Each view should feel like a Finder/1Password/Linear-style instrument, not a page to read downward.
+
 ## Reference Patterns
 - SuperMemory: broad source onboarding, agent context cloud, hybrid search, graph, connectors.
 - NicelyDone Town/Mailchimp/Bird/Maze/Slite: integration marketplace and settings lists.
