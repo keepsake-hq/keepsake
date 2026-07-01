@@ -22,6 +22,7 @@ A user opens Keepsake on a laptop in normal daylight to save, search, import, or
 - Sidebar, header, command bars, and tool controls stay fixed inside each view.
 - Only concrete work regions scroll: memory ledgers, source lists, search results, profile audit lists, map details, and inspectors.
 - Avoid vertically stacked landing-page sections. Each view should feel like a Finder/1Password/Linear-style instrument, not a page to read downward.
+- Settings uses a real app-preferences model: categories on the left, one active category on the right, compact rows with the label on the left and the status/control on the right.
 
 ## Reference Patterns
 - SuperMemory: broad source onboarding, agent context cloud, hybrid search, graph, connectors.

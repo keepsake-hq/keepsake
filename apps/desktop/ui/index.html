@@ -230,20 +230,19 @@
             <div class="tool-title-row">
               <div>
                 <h1>Memory</h1>
-                <p>Save, find, and inspect local context.</p>
+                <p>Local context ledger.</p>
               </div>
               <div class="tool-actions">
                 <span class="inline-flex items-center gap-2"><span class="status-dot"></span>Local</span>
-                <span>Sync off</span>
+                <span>Network idle</span>
                 <button data-home-view="einstellungen" class="text-ink hover:text-brand-700 transition">Settings</button>
               </div>
             </div>
 
             <div class="mt-4 utility-bar">
               <div><span>Vault</span><strong>Local</strong></div>
-              <div><span>Network</span><strong>Idle</strong></div>
-              <div><span>Sources</span><strong>Local files, agents</strong></div>
               <div><span>Key</span><strong>This Mac</strong></div>
+              <div><span>Access</span><strong>User action</strong></div>
             </div>
 
             <div class="mt-4 command-bar rounded-lg p-2 flex items-center gap-3">
@@ -286,14 +285,8 @@
               </div>
 
               <aside class="inspector rounded-lg px-5 py-5">
-                <div class="flex items-center justify-between gap-3">
-                  <h2 class="text-sm font-semibold text-ink">Memory details</h2>
-                  <div class="flex items-center gap-1 text-muted">
-                    <button class="w-8 h-8 inline-flex items-center justify-center rounded-lg hover:bg-canvas transition" aria-label="Favorite memory"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17.5 6.8 20l1-5.8-4.2-4.1 5.8-.9L12 4l2.6 5.2 5.8.9-4.2 4.1 1 5.8-5.2-2.5Z"/></svg></button>
-                    <button class="w-8 h-8 inline-flex items-center justify-center rounded-lg hover:bg-canvas transition" aria-label="Edit memory"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m14 4 6 6"/><path d="M4 20h6L20 10l-6-6L4 14v6Z"/></svg></button>
-                  </div>
-                </div>
-                <div id="home-detail" class="mt-7"></div>
+                <h2 class="text-sm font-semibold text-ink">Inspector</h2>
+                <div id="home-detail" class="mt-5"></div>
               </aside>
             </div>
           </div>
@@ -334,7 +327,7 @@
             <div class="tool-title-row">
               <div>
                 <h1>Sources</h1>
-                <p>Connect local context deliberately. Cloud sources stay planned until you act.</p>
+                <p>Local imports and planned connectors.</p>
               </div>
               <div class="tool-actions">
                 <span id="connector-count"></span>
@@ -347,7 +340,7 @@
               <div class="ledger-panel">
                 <div class="ledger-toolbar">
                   <h2>Integration list</h2>
-                  <span>Local first. No background network.</span>
+                  <span>No background network</span>
                 </div>
                 <div class="source-head">
                   <span>Source</span>
@@ -360,7 +353,7 @@
               </div>
               <aside class="inspector rounded-lg p-5">
                 <h2 class="text-sm font-semibold text-ink">Documents</h2>
-                <p class="mt-1 text-sm text-muted">Recent imported context by source.</p>
+                <p class="mt-1 text-sm text-muted">Recent imports.</p>
                 <div id="document-list" class="mt-4 scroll-region space-y-0"></div>
               </aside>
             </div>
@@ -405,7 +398,7 @@
             <div class="tool-title-row">
               <div>
                 <h1>Profile audit</h1>
-                <p>Facts, sources, conflicts, and stale context built locally from memory.</p>
+                <p>Facts and source audit.</p>
               </div>
               <div class="tool-actions">
                 <button id="profile-redistill" class="min-h-[36px] rounded-md bg-brand-700 px-3 text-sm font-semibold text-white hover:bg-brand-800 transition">Rebuild</button>
@@ -418,7 +411,7 @@
               <div class="ledger-panel">
                 <div class="ledger-toolbar">
                   <h2>Fact audit</h2>
-                  <span>Local summary, editable by rebuild or clear.</span>
+                  <span>Local only</span>
                 </div>
                 <div id="profile-text" class="scroll-region"></div>
               </div>
@@ -437,7 +430,7 @@
             <div class="tool-title-row">
               <div>
                 <h1>Search</h1>
-                <p>Query local memory with a chosen recall mode.</p>
+                <p>Query local memory.</p>
               </div>
             </div>
             <div class="mt-4 command-bar rounded-lg p-2 flex items-center gap-3">
@@ -480,162 +473,170 @@
             <div class="tool-title-row">
               <div>
                 <h1>Settings</h1>
-                <p>Control local access, import, recovery, sync, and app behavior.</p>
+                <p>Device controls and vault behavior.</p>
               </div>
             </div>
           </header>
           <div class="tool-body">
             <div class="workspace-grid settings-grid">
               <aside class="settings-rail">
-                <a href="#settings-vault">Vault <span id="set-count-rail" class="text-xs text-soft"></span></a>
-                <a href="#settings-import">Import</a>
-                <a href="#settings-appearance">Appearance</a>
-                <a href="#settings-key">Key</a>
-                <a href="#settings-unlock">Unlock</a>
-                <a href="#settings-recovery">Recovery</a>
-                <a href="#settings-sync">Sync</a>
-                <a href="#settings-backup">Backup</a>
-                <a href="#settings-updates">Updates</a>
+                <button data-settings-tab="general" aria-selected="true">General</button>
+                <button data-settings-tab="appearance" aria-selected="false">Appearance</button>
+                <button data-settings-tab="recovery-key" aria-selected="false">Recovery Key</button>
+                <button data-settings-tab="quick-unlock" aria-selected="false">Quick Unlock</button>
+                <button data-settings-tab="sync" aria-selected="false">Sync</button>
+                <button data-settings-tab="backup" aria-selected="false">Backup</button>
+                <button data-settings-tab="updates" aria-selected="false">Updates</button>
+                <button data-settings-tab="advanced" aria-selected="false">Advanced</button>
               </aside>
-              <div class="scroll-region">
-                <div class="settings-list">
-            <!-- Your memories -->
-            <div id="settings-vault" class="pane rounded-2xl p-5">
-              <div class="flex items-center justify-between">
-                <span class="text-lg text-ink">Memories saved</span>
-                <span id="set-count" class="text-lg font-bold text-ink">–</span>
-              </div>
-              <p class="mt-3 flex items-start gap-2 text-base text-muted"><span class="mt-2 w-2 h-2 rounded-full bg-brand-500 shrink-0"></span> <span>Stored in this local vault. Network stays idle until you press a network action.</span></p>
-            </div>
-
-            <!-- Bring your memories in (import from other AI systems) -->
-            <div id="settings-import" class="pane rounded-2xl p-5">
-              <h2 class="text-lg font-semibold text-ink">Bring your memories in</h2>
-              <p class="mt-1 text-base text-muted">Switching from another AI? Pull the memory you already built up. It is deduplicated locally and stays on this computer.</p>
-              <button id="import-open" class="mt-3 min-h-[48px] inline-flex items-center rounded-xl border-2 border-line px-5 text-base font-semibold text-ink hover:bg-canvas transition">Import memories</button>
-            </div>
-
-            <!-- Appearance (light / dark / system) -->
-            <div id="settings-appearance" class="pane rounded-2xl p-5">
-              <h2 class="text-lg font-semibold text-ink">Appearance</h2>
-              <p class="mt-1 text-base text-muted">Light, dark, or follow your Mac.</p>
-              <div class="mt-3 inline-flex rounded-xl border-2 border-line overflow-hidden" role="group" aria-label="Theme">
-                <button data-theme="light" class="theme-btn min-h-[44px] px-5 text-base font-semibold text-ink hover:bg-canvas transition">Light</button>
-                <button data-theme="dark" class="theme-btn min-h-[44px] px-5 text-base font-semibold text-ink hover:bg-canvas transition">Dark</button>
-                <button data-theme="system" class="theme-btn min-h-[44px] px-5 text-base font-semibold text-ink hover:bg-canvas transition">System</button>
-              </div>
-            </div>
-
-            <!-- Your 24 words (reveal, like a wallet) -->
-            <div id="settings-key" class="pane rounded-2xl p-5">
-              <h2 class="text-lg font-semibold text-ink">Your 24 words</h2>
-              <p class="mt-1 text-base text-muted">These open your memories. Keep them private — and write them on paper if you haven't yet.</p>
-              <button id="reveal-seed-btn" class="mt-3 min-h-[48px] inline-flex items-center gap-2 rounded-xl border-2 border-line px-5 text-base font-semibold text-ink hover:bg-canvas transition">
-                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
-                Show my 24 words
-              </button>
-              <div id="reveal-seed-area" class="hidden mt-3">
-                <p class="text-base font-medium text-amber-700">Make sure no one is looking over your shoulder.</p>
-                <div id="reveal-seed-grid" class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2"></div>
-                <button id="reveal-seed-hide" class="mt-3 min-h-[44px] text-base font-medium text-muted hover:text-ink underline underline-offset-2">Hide</button>
-              </div>
-            </div>
-
-            <!-- Quick unlock (PIN) -->
-            <div id="settings-unlock" class="pane rounded-2xl p-5">
-              <h2 class="text-lg font-semibold text-ink">Quick unlock</h2>
-              <p class="mt-1 text-base text-muted">Open Keepsake with a short PIN instead of typing all 24 words every time. Your 24 words still work, and stay your master backup.</p>
-
-              <div id="qu-off">
-                <div class="mt-3 space-y-2">
-                  <input id="qu-set-pin1" type="password" inputmode="numeric" autocomplete="off" placeholder="Choose a PIN (at least 6 characters)" class="w-full min-h-[48px] rounded-xl border-2 border-line bg-canvas px-4 text-base text-ink focus:outline-none focus:border-brand-600" />
-                  <input id="qu-set-pin2" type="password" inputmode="numeric" autocomplete="off" placeholder="Repeat your PIN" class="w-full min-h-[48px] rounded-xl border-2 border-line bg-canvas px-4 text-base text-ink focus:outline-none focus:border-brand-600" />
+              <div class="settings-panel">
+                <div class="settings-panel-head">
+                  <div>
+                    <h2 id="settings-section-title">General</h2>
+                    <p id="settings-section-note">Local app defaults.</p>
+                  </div>
+                  <span class="settings-state"><span class="status-dot"></span>Local</span>
                 </div>
-                <button id="qu-enable-btn" class="mt-3 min-h-[48px] inline-flex items-center rounded-xl bg-brand-700 px-5 text-base font-semibold text-white hover:bg-brand-800 transition">Turn on quick unlock</button>
-                <p class="mt-2 text-sm text-muted">A copy of your key is then stored on this Mac, locked by your PIN. A longer passphrase is safer than a short number.</p>
-              </div>
 
-              <div id="qu-on" class="hidden">
-                <p class="mt-2 text-base font-medium text-brand-700">Quick unlock is on for this device.</p>
-                <div class="mt-3 flex flex-wrap gap-2">
-                  <button id="qu-change-btn" class="min-h-[44px] rounded-xl border-2 border-line px-4 text-base font-semibold text-ink hover:bg-canvas transition">Change PIN</button>
-                  <button id="qu-disable-btn" class="min-h-[44px] rounded-xl px-4 text-base font-medium text-red-600 hover:text-red-700">Turn off</button>
+                <div data-settings-section="general" class="settings-section scroll-region">
+                  <div class="setting-row">
+                    <div><h3>Vault</h3><p>Stored on this Mac.</p></div>
+                    <div class="setting-value">Local</div>
+                    <span id="set-count" class="hidden">–</span>
+                  </div>
+                  <div class="setting-row">
+                    <div><h3>Network access</h3><p>Only after a direct action.</p></div>
+                    <div class="setting-value">Idle</div>
+                  </div>
+                  <div class="setting-row">
+                    <div><h3>Agent access</h3><p>Scoped local passes.</p></div>
+                    <button data-home-view="agents" class="settings-button">Manage</button>
+                  </div>
                 </div>
-                <div id="qu-change-form" class="hidden mt-3 space-y-2">
-                  <input id="qu-old-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Current PIN" class="w-full min-h-[48px] rounded-xl border-2 border-line bg-canvas px-4 text-base text-ink focus:outline-none focus:border-brand-600" />
-                  <input id="qu-new-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="New PIN (at least 6 characters)" class="w-full min-h-[48px] rounded-xl border-2 border-line bg-canvas px-4 text-base text-ink focus:outline-none focus:border-brand-600" />
-                  <button id="qu-change-save" class="min-h-[44px] rounded-xl bg-brand-700 px-5 text-base font-semibold text-white hover:bg-brand-800 transition">Save new PIN</button>
+
+                <div data-settings-section="appearance" class="settings-section scroll-region hidden">
+                  <div class="setting-row">
+                    <div><h3>Theme</h3><p>Light, dark, or system.</p></div>
+                    <div class="segmented-control" role="group" aria-label="Theme">
+                      <button data-theme="light" class="theme-btn">Light</button>
+                      <button data-theme="dark" class="theme-btn">Dark</button>
+                      <button data-theme="system" class="theme-btn">System</button>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div><h3>Density</h3><p>Ledger-first layout.</p></div>
+                    <div class="setting-value">Compact</div>
+                  </div>
                 </div>
-              </div>
-              <p id="qu-settings-msg" class="mt-2 text-base hidden"></p>
-            </div>
 
-            <!-- Your safety net (social recovery) -->
-            <div id="settings-recovery" class="pane rounded-2xl p-5">
-              <h2 class="text-lg font-semibold text-ink">Your safety net</h2>
-              <p class="mt-1 text-base text-muted">Give a sealed piece of your key to 2–3 people you trust. If you ever lose your words, any two of them together can bring your memories back. None of them can ever read your memories.</p>
-              <p id="safetynet-status" class="mt-2 text-base font-medium text-amber-700">Not set up yet.</p>
-              <button id="safetynet-setup" class="mt-3 min-h-[48px] inline-flex items-center rounded-xl border-2 border-line px-5 text-base font-semibold text-ink hover:bg-canvas transition">Set up trusted people</button>
-            </div>
+                <div data-settings-section="recovery-key" class="settings-section scroll-region hidden">
+                  <div class="setting-row setting-row-stack">
+                    <div class="setting-row-main">
+                      <div><h3>Recovery key</h3><p>Show the 24 words for this vault.</p></div>
+                      <button id="reveal-seed-btn" class="settings-button">
+                        Show key
+                      </button>
+                    </div>
+                    <div id="reveal-seed-area" class="hidden mt-3">
+                      <p class="text-sm font-medium text-amber-700">Check your surroundings.</p>
+                      <div id="reveal-seed-grid" class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2"></div>
+                      <button id="reveal-seed-hide" class="mt-3 min-h-[34px] text-sm font-medium text-muted hover:text-ink underline underline-offset-2">Hide</button>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div><h3>Trusted recovery</h3><p>Restore with trusted people.</p></div>
+                    <div class="settings-inline">
+                      <span id="safetynet-status" class="setting-status warning">Not set up</span>
+                      <button id="safetynet-setup" class="settings-button">Set up</button>
+                    </div>
+                  </div>
+                </div>
 
-            <!-- Your other devices (sync) -->
-            <div id="settings-sync" class="pane rounded-2xl p-5 space-y-3">
-              <div>
-                <h2 class="text-lg font-semibold text-ink">Your other devices</h2>
-                <p class="mt-1 text-base text-muted">Off by default. Your notes stay only here. When on, your devices share the same notes privately: the place in the middle can never read them.</p>
-              </div>
-              <div class="grid grid-cols-3 gap-2">
-                <button data-sync="off" class="sync-opt min-h-[48px] rounded-xl border-2 border-line text-base font-semibold text-ink hover:bg-canvas transition">Off</button>
-                <button data-sync="hosted" class="sync-opt min-h-[48px] rounded-xl border-2 border-line text-base font-semibold text-ink hover:bg-canvas transition">On</button>
-                <button data-sync="own" class="sync-opt min-h-[48px] rounded-xl border-2 border-line text-base font-semibold text-ink hover:bg-canvas transition">My own server</button>
-              </div>
-              <div id="sync-own-row" class="hidden space-y-2">
-                <input id="sync-url" type="url" placeholder="https://your-server.example" class="w-full rounded-xl border-2 border-line px-4 py-3 text-base text-ink placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
-                <button id="sync-url-save" class="min-h-[48px] rounded-xl bg-brand-700 text-white text-base font-semibold px-5 hover:bg-brand-800 transition">Save server</button>
-              </div>
-              <p id="sync-status" class="text-base text-muted"></p>
-            </div>
+                <div data-settings-section="quick-unlock" class="settings-section scroll-region hidden">
+                  <div class="setting-row setting-row-stack">
+                    <div class="setting-row-main">
+                      <div><h3>Quick unlock</h3><p>Use a local PIN on this Mac.</p></div>
+                      <p id="qu-settings-msg" class="text-sm hidden"></p>
+                    </div>
 
-            <!-- A safe copy (encrypted backup) -->
-            <div id="settings-backup" class="pane rounded-2xl p-5">
-              <h2 class="text-lg font-semibold text-ink">A safe copy</h2>
-              <p class="mt-1 text-base text-muted">Keep an encrypted copy online, so if this computer is ever lost or breaks, you can get all your memories back on a new one. We can never read it.</p>
-              <p id="backup-status" class="mt-2 text-base font-medium text-amber-700">Off.</p>
-              <div class="mt-3 flex flex-wrap gap-2">
-                <button id="backup-toggle" class="min-h-[48px] inline-flex items-center rounded-xl border-2 border-line px-5 text-base font-semibold text-ink hover:bg-canvas transition">Keep a safe copy</button>
-                <button id="backup-restore-btn" class="min-h-[48px] inline-flex items-center rounded-xl border-2 border-line px-5 text-base font-semibold text-ink hover:bg-canvas transition">Bring back from a safe copy</button>
-              </div>
-            </div>
+                    <div id="qu-off" class="settings-form">
+                      <div class="grid gap-2 sm:grid-cols-2">
+                        <input id="qu-set-pin1" type="password" inputmode="numeric" autocomplete="off" placeholder="New PIN" class="settings-input" />
+                        <input id="qu-set-pin2" type="password" inputmode="numeric" autocomplete="off" placeholder="Repeat PIN" class="settings-input" />
+                      </div>
+                      <button id="qu-enable-btn" class="settings-primary">Turn on</button>
+                    </div>
 
-            <!-- Updates (manual + honest: no automatic network call on startup) -->
-            <div id="settings-updates" class="pane rounded-2xl p-5">
-              <h2 class="text-lg font-semibold text-ink">Updates</h2>
-              <p class="mt-1 text-base text-muted">Keepsake never phones home. The only time it reaches the internet for updates is when you press this button.</p>
-              <p id="update-status" class="mt-2 text-base font-medium text-muted hidden"></p>
-              <div class="mt-3">
-                <button id="update-check-btn" class="min-h-[48px] inline-flex items-center rounded-xl border-2 border-line px-5 text-base font-semibold text-ink hover:bg-canvas transition">Check for updates</button>
-              </div>
-            </div>
+                    <div id="qu-on" class="hidden settings-form">
+                      <div class="settings-inline">
+                        <span class="setting-status ok">On for this Mac</span>
+                        <button id="qu-change-btn" class="settings-button">Change PIN</button>
+                        <button id="qu-disable-btn" class="settings-danger-link">Turn off</button>
+                      </div>
+                      <div id="qu-change-form" class="hidden grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                        <input id="qu-old-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="Current PIN" class="settings-input" />
+                        <input id="qu-new-pin" type="password" inputmode="numeric" autocomplete="off" placeholder="New PIN" class="settings-input" />
+                        <button id="qu-change-save" class="settings-primary">Save</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
 
-            <!-- For helpers & techies (advanced; quarantined away from the grandma surface) -->
-            <details class="pane rounded-2xl p-5">
-              <summary class="text-lg font-semibold text-ink cursor-pointer select-none">For helpers &amp; techies</summary>
-              <div class="mt-3 space-y-2 text-base text-muted">
-                <p>This computer can let a local AI assistant, like a coding assistant, remember things in Keepsake and look them up automatically. Your 24 words are never shared; the assistant gets a limited pass, and you can switch it off anytime.</p>
-                <p>To connect one today, a technical user runs <code class="rounded bg-canvas px-1.5 py-0.5 text-sm">keepsake connect</code> in a terminal. A one-tap in-app “connect an assistant” is on the way.</p>
-              </div>
-            </details>
+                <div data-settings-section="sync" class="settings-section scroll-region hidden">
+                  <div class="setting-row setting-row-stack">
+                    <div class="setting-row-main">
+                      <div><h3>Device sync</h3><p>Off unless you turn it on.</p></div>
+                      <p id="sync-status" class="setting-status">Off</p>
+                    </div>
+                    <div class="segmented-control" role="group" aria-label="Device sync">
+                      <button data-sync="off" class="sync-opt">Off</button>
+                      <button data-sync="hosted" class="sync-opt">Keepsake</button>
+                      <button data-sync="own" class="sync-opt">Own server</button>
+                    </div>
+                    <div id="sync-own-row" class="hidden settings-form sm:grid sm:grid-cols-[1fr_auto]">
+                      <input id="sync-url" type="url" placeholder="https://your-server.example" class="settings-input" />
+                      <button id="sync-url-save" class="settings-primary">Save</button>
+                    </div>
+                  </div>
+                </div>
 
-            <!-- Lock -->
-            <button id="lock-btn-2" class="block w-full rounded-2xl border-2 border-line bg-surface px-5 py-4 text-left hover:bg-canvas transition">
-              <div class="text-lg font-semibold text-ink">Lock this app</div>
-              <div class="mt-0.5 text-base text-muted">Hides your notes. You only need your 24 words to open it again.</div>
-            </button>
+                <div data-settings-section="backup" class="settings-section scroll-region hidden">
+                  <div class="setting-row">
+                    <div><h3>Encrypted backup</h3><p>Manual safe copy.</p></div>
+                    <div class="settings-inline">
+                      <span id="backup-status" class="setting-status warning">Off</span>
+                      <button id="backup-toggle" class="settings-button">Turn on</button>
+                      <button id="backup-restore-btn" class="settings-button">Restore</button>
+                    </div>
+                  </div>
+                </div>
 
-            <!-- Start over (quiet, at the bottom) -->
-            <div class="pt-2 text-center">
-              <button id="settings-startover" class="min-h-[44px] text-base font-medium text-muted hover:text-red-700 underline underline-offset-2">Start over with a new, empty Keepsake</button>
-            </div>
+                <div data-settings-section="updates" class="settings-section scroll-region hidden">
+                  <div class="setting-row">
+                    <div><h3>Updates</h3><p>Manual check only.</p></div>
+                    <div class="settings-inline">
+                      <p id="update-status" class="setting-status hidden"></p>
+                      <button id="update-check-btn" class="settings-button">Check now</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div data-settings-section="advanced" class="settings-section scroll-region hidden">
+                  <div class="setting-row">
+                    <div><h3>Assistant command</h3><p>For local agent setup.</p></div>
+                    <code class="settings-code">keepsake connect</code>
+                  </div>
+                  <div class="setting-row">
+                    <div><h3>Lock this app</h3><p>Hide memory until unlock.</p></div>
+                    <button id="lock-btn-2" class="settings-button">Lock</button>
+                  </div>
+                  <div class="settings-danger-zone">
+                    <div>
+                      <h3>Danger zone</h3>
+                      <p>Local reset only.</p>
+                    </div>
+                    <button id="settings-startover" class="settings-danger-button">Start over with a new, empty Keepsake</button>
+                  </div>
                 </div>
               </div>
             </div>

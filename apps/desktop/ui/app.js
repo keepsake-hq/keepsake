@@ -29,6 +29,8 @@ function refreshThemeButtons() {
   const mode = currentThemeMode();
   $$(".theme-btn").forEach((b) => {
     const active = b.dataset.theme === mode;
+    b.dataset.active = active ? "true" : "false";
+    b.setAttribute("aria-pressed", String(active));
     b.classList.toggle("bg-brand-700", active);
     b.classList.toggle("text-white", active);
     b.classList.toggle("text-ink", !active);
@@ -63,6 +65,7 @@ let SETTINGS_COUNT = 0;
 let SEARCH_MODE = "balanced";
 let ACTIVE_AGENT_CLIENT = "codex";
 let SELECTED_HOME_MEMORY_ID = null;
+let ACTIVE_SETTINGS_SECTION = "general";
 
 const AUTH_SCREENS = ["onboarding", "unlock", "lostaccess", "reset"];
 function show(id) {
@@ -146,6 +149,33 @@ function escapeHtml(s) {
 
 function countLabel(n) {
   return `${n} ${n === 1 ? "memory" : "memories"}`;
+}
+
+const SETTINGS_SECTIONS = {
+  general: ["General", "Local app defaults."],
+  appearance: ["Appearance", "Theme and density."],
+  "recovery-key": ["Recovery Key", "Key and trusted recovery."],
+  "quick-unlock": ["Quick Unlock", "Local device unlock."],
+  sync: ["Sync", "Device sync controls."],
+  backup: ["Backup", "Encrypted safe copy."],
+  updates: ["Updates", "Manual checks only."],
+  advanced: ["Advanced", "Technical and reset controls."],
+};
+
+function setSettingsSection(id) {
+  ACTIVE_SETTINGS_SECTION = SETTINGS_SECTIONS[id] ? id : "general";
+  const [title, note] = SETTINGS_SECTIONS[ACTIVE_SETTINGS_SECTION];
+  const titleEl = $("#settings-section-title");
+  const noteEl = $("#settings-section-note");
+  if (titleEl) titleEl.textContent = title;
+  if (noteEl) noteEl.textContent = note;
+  $$("[data-settings-tab]").forEach((button) => {
+    const active = button.dataset.settingsTab === ACTIVE_SETTINGS_SECTION;
+    button.setAttribute("aria-selected", String(active));
+  });
+  $$("[data-settings-section]").forEach((section) => {
+    section.classList.toggle("hidden", section.dataset.settingsSection !== ACTIVE_SETTINGS_SECTION);
+  });
 }
 
 // A friendly provenance label from a raw source tag (e.g. "proxy:openai:gpt-4" -> "via GPT",
@@ -262,7 +292,7 @@ function renderHomeDetail(mem) {
   if (!host) return;
   if (!mem) {
     host.innerHTML = `
-      <div class="text-sm text-muted">Select a memory to see source, type, and related context.</div>`;
+      <div class="text-sm text-muted">Select a memory.</div>`;
     return;
   }
   const title = (mem.text || "").split("\n").find((line) => line.trim()) || "Untitled memory";
@@ -278,18 +308,18 @@ function renderHomeDetail(mem) {
     .filter((m) => m.id !== mem.id)
     .slice(0, 3);
   host.innerHTML = `
-    <h3 class="text-lg font-semibold leading-snug text-ink">${escapeHtml(title.trim())}</h3>
-    <p class="mt-2 text-sm text-muted">${escapeHtml((mem.text || "").replace(/\s*\n\s*/g, " ").slice(0, 180))}</p>
-    <div class="mt-6 border-t border-line pt-5">
-      <h4 class="text-sm font-semibold text-ink">About this memory</h4>
-      <dl class="mt-4 space-y-3 text-sm">
+    <h3 class="text-base font-semibold leading-snug text-ink">${escapeHtml(title.trim())}</h3>
+    <p class="mt-2 text-sm text-muted">${escapeHtml((mem.text || "").replace(/\s*\n\s*/g, " ").slice(0, 160))}</p>
+    <div class="mt-5 border-t border-line pt-4">
+      <h4 class="text-xs font-semibold text-soft">Details</h4>
+      <dl class="mt-3 space-y-2 text-sm">
         <div class="flex justify-between gap-4"><dt class="text-muted">Source</dt><dd class="text-ink text-right">${escapeHtml(src)}</dd></div>
         <div class="flex justify-between gap-4"><dt class="text-muted">Created</dt><dd class="text-ink text-right">${escapeHtml(created)}</dd></div>
         <div class="flex justify-between gap-4"><dt class="text-muted">Memory ID</dt><dd class="text-ink text-right">${escapeHtml(mem.id.slice(0, 10))}…</dd></div>
       </dl>
     </div>
-    <div class="mt-6 border-t border-line pt-5">
-      <h4 class="text-sm font-semibold text-ink">Related</h4>
+    <div class="mt-5 border-t border-line pt-4">
+      <h4 class="text-xs font-semibold text-soft">Related</h4>
       <div class="mt-3 space-y-2">
         ${related
           .map((m) => `<div class="flex items-start justify-between gap-3 text-sm"><span class="text-muted">${escapeHtml((m.text || "").split("\n")[0].slice(0, 44))}</span><span class="text-xs text-soft">${escapeHtml(dateLabel(m.created_at).replace(/, 2026$/, ""))}</span></div>`)
@@ -342,16 +372,16 @@ function connectorInitial(title) {
 }
 function demoConnectors() {
   const specs = [
-    ["claude-code", "Claude Code", "Import local CLAUDE.md rules and memory notes.", "AI chats", "import:claude-code", "local-auto", false, true, "Scan this Mac", "Reads local files only. Nothing leaves this computer."],
-    ["coding-agents", "Coding agents", "Bring in Codex, Cursor, Gemini, Aider, Continue, and AGENTS.md rules.", "AI chats", "import:coding-agents", "local-auto", false, true, "Scan this Mac", "Reads local rule and memory files only."],
-    ["obsidian", "Obsidian", "Read detected Obsidian vaults as local Markdown notes.", "Notes", "import:obsidian", "local-auto", false, true, "Scan vaults", "Reads local vault folders only."],
-    ["local-folder", "Files and folders", "Import Markdown, text, JSON, CSV, ENEX, ZIP, and ChromaDB files.", "Files", "import:folder", "local-picker", false, true, "Pick file or folder", "You choose the path. Keepsake only reads that local selection."],
-    ["paste", "Paste memories", "Paste saved memories or an export from another assistant.", "AI chats", "import:paste", "paste", false, true, "Paste text", "Parsed locally before import."],
-    ["mcp-agents", "Claude, Cursor, Codex, OpenCode", "Connect local agents to one shared Keepsake memory hub.", "Agents", "mcp", "agent-setup", false, false, "Show setup", "Agents receive a scoped local pass, never your 24 words."],
-    ["google-drive", "Google Drive", "Scoped folder or file import for Drive documents.", "Cloud", "import:google-drive", "cloud-oauth-planned", true, false, "Planned", "Only after you connect it. No background network by default."],
-    ["notion", "Notion", "Import selected pages and database rows.", "Cloud", "import:notion", "cloud-oauth-planned", true, false, "Planned", "Only after you connect it. OAuth tokens stay local-only."],
-    ["github", "GitHub", "Bring in selected issues, discussions, docs, or repos.", "Cloud", "import:github", "cloud-oauth-planned", true, false, "Planned", "Only after you connect it. No repository is scanned automatically."],
-    ["gmail", "Gmail", "Import selected mail threads as searchable memories.", "Cloud", "import:gmail", "cloud-oauth-planned", true, false, "Planned", "Only after you connect it. No mail sync runs in the background."],
+    ["claude-code", "Claude Code", "CLAUDE.md and local notes.", "AI chats", "import:claude-code", "local-auto", false, true, "Scan", "Local files only."],
+    ["coding-agents", "Coding agents", "Codex, Cursor, Gemini, Aider.", "AI chats", "import:coding-agents", "local-auto", false, true, "Scan", "Local files only."],
+    ["obsidian", "Obsidian", "Markdown vaults.", "Notes", "import:obsidian", "local-auto", false, true, "Scan", "Local folders only."],
+    ["local-folder", "Files and folders", "Markdown, text, JSON, CSV.", "Files", "import:folder", "local-picker", false, true, "Pick", "Selected path only."],
+    ["paste", "Paste memories", "Manual import.", "AI chats", "import:paste", "paste", false, true, "Paste", "Parsed locally."],
+    ["mcp-agents", "Claude, Cursor, Codex, OpenCode", "Shared local memory hub.", "Agents", "mcp", "agent-setup", false, false, "Setup", "Scoped pass only."],
+    ["google-drive", "Google Drive", "Selected Drive files.", "Cloud", "import:google-drive", "cloud-oauth-planned", true, false, "Planned", "No background sync."],
+    ["notion", "Notion", "Selected pages.", "Cloud", "import:notion", "cloud-oauth-planned", true, false, "Planned", "No background sync."],
+    ["github", "GitHub", "Selected repos or issues.", "Cloud", "import:github", "cloud-oauth-planned", true, false, "Planned", "No background scan."],
+    ["gmail", "Gmail", "Selected threads.", "Cloud", "import:gmail", "cloud-oauth-planned", true, false, "Planned", "No background sync."],
   ];
   return specs.map(([id, title, description, category, source_tag, access, network, supports_preview, primary_action, privacy_note]) => {
     const matches = DEMO_MEMORIES.filter((m) => source_tag === "mcp" ? (m.source || "").startsWith("mcp:") : m.source === source_tag);
@@ -415,8 +445,9 @@ function renderConnectorCard(c) {
 function renderConnectorRow(c) {
   const count = c.memory_count ? `${c.memory_count} ${c.memory_count === 1 ? "memory" : "memories"}` : c.network ? "Needs explicit connect" : "Ready";
   const last = c.last_imported_at ? fmtTime(c.last_imported_at) : c.network ? "Not connected" : "Ready";
+  const planned = c.status === "planned";
   return `
-    <button data-connector-action="${escapeHtml(c.id)}" class="memory-table-row row-surface source-row w-full px-4 py-3 text-left grid gap-3 items-center md:grid-cols-[minmax(12rem,1fr)_7rem_6.5rem_8rem_7rem]">
+    <button data-connector-action="${escapeHtml(c.id)}" aria-disabled="${planned}" class="memory-table-row row-surface source-row ${planned ? "source-row-planned" : ""} w-full px-4 py-3 text-left grid gap-3 items-center md:grid-cols-[minmax(12rem,1fr)_7rem_6.5rem_8rem_6rem]">
       <span class="min-w-0 flex items-center gap-3">
         <span class="icon-cell w-9 h-9 rounded-lg flex items-center justify-center text-xs font-semibold shrink-0">${escapeHtml(connectorInitial(c.title))}</span>
         <span class="min-w-0">
@@ -434,7 +465,7 @@ function renderDocuments(documents) {
   const docs = $("#document-list");
   if (!docs) return;
   if (!documents.length) {
-    docs.innerHTML = `<p class="text-sm text-muted">No imported documents yet.</p>`;
+    docs.innerHTML = `<p class="text-sm text-muted">No imports yet.</p>`;
     return;
   }
   docs.innerHTML = documents.slice(0, 12).map((d) => `
@@ -571,7 +602,7 @@ function renderProfileAudit(profile) {
   }
   rows.push(
     { label: "Conflicts", value: "Not tracked in this build", type: "Audit" },
-    { label: "Stale facts", value: "Use Rebuild to refresh from current memory", type: "Audit" },
+    { label: "Stale facts", value: "Rebuild to refresh", type: "Audit" },
   );
   return `
     <div class="grid grid-cols-[minmax(10rem,1fr)_minmax(12rem,1.4fr)_7rem] gap-3 px-4 py-2 border-b border-line text-xs font-semibold text-soft">
@@ -781,8 +812,8 @@ async function showNoResult(q) {
   empty.classList.remove("hidden");
   empty.innerHTML = `
     <div class="px-4 py-5 border-b border-line">
-      <p class="text-sm font-semibold text-ink">No matching memory.</p>
-      <p class="mt-1 text-sm text-muted">Try a shorter query, or save this as a new memory.</p>
+      <p class="text-sm font-semibold text-ink">No match.</p>
+      <p class="mt-1 text-sm text-muted">Shorten the query or save it.</p>
       <button id="save-as-memory" class="mt-4 inline-flex min-h-[38px] items-center rounded-md bg-brand-700 px-3 text-sm font-semibold text-white hover:bg-brand-800 transition">Save “${escapeHtml(q)}”</button>
     </div>
     ${recent.length ? `<div><div class="px-4 py-2 text-xs font-semibold text-soft border-b border-line">Recent memories</div><ul>${recent.map(renderHit).join("")}</ul></div>` : ""}`;
@@ -1083,6 +1114,8 @@ function enterShell() {
 function paintSyncOptions(mode) {
   $$(".sync-opt").forEach((b) => {
     const active = b.dataset.sync === mode;
+    b.dataset.active = active ? "true" : "false";
+    b.setAttribute("aria-pressed", String(active));
     b.classList.toggle("border-brand-500", active);
     b.classList.toggle("bg-brand-50", active);
     b.classList.toggle("text-brand-700", active);
@@ -1097,10 +1130,10 @@ function setSyncStatus(mode) {
   if (el) {
     el.textContent =
       mode === "hosted"
-        ? "On. Your devices share the same notes privately. The place in the middle can never read them."
+        ? "On via Keepsake"
         : mode === "own"
-          ? "On. Syncing through your own server."
-          : "Off. Your notes stay only on this computer.";
+          ? "On via own server"
+          : "Off";
   }
   // Keep the honest line on the Home screen in step with the real setting.
   const home = $("#home-status-text");
@@ -1176,6 +1209,7 @@ function navTo(view) {
   if (view === "quellen") refreshSources();
   if (view === "agents") renderAgents();
   if (view === "profile") refreshProfile();
+  if (view === "einstellungen") setSettingsSection(ACTIVE_SETTINGS_SECTION);
   if (view === "map") buildGraph();
   else if (window.__keepsakeMapReady) stopGraph();
 }
@@ -1197,6 +1231,10 @@ $("#lock-btn-2").addEventListener("click", doLock);
 $$(".nav-item").forEach((b) =>
   b.addEventListener("click", () => navTo(b.getAttribute("data-view"))),
 );
+$$("[data-settings-tab]").forEach((b) =>
+  b.addEventListener("click", () => setSettingsSection(b.dataset.settingsTab)),
+);
+setSettingsSection(ACTIVE_SETTINGS_SECTION);
 wireSyncControls();
 
 // ---------- lost-access + start-fresh (never get stuck on the unlock screen) ----------
@@ -1336,11 +1374,13 @@ async function loadRecoveryStatus() {
     } catch (_) {}
   }
   if (meta && meta.names && meta.names.length) {
-    el.textContent = "On. Pieces are with: " + meta.names.join(", ");
-    el.className = "mt-2 text-base font-medium text-brand-700";
+    el.textContent = "On";
+    el.title = "Pieces are with: " + meta.names.join(", ");
+    el.className = "setting-status ok";
   } else {
-    el.textContent = "Not set up yet.";
-    el.className = "mt-2 text-base font-medium text-amber-700";
+    el.textContent = "Not set up";
+    el.title = "";
+    el.className = "setting-status warning";
   }
 }
 
@@ -1493,14 +1533,14 @@ async function loadBackupStatus() {
   }
   if (meta && meta.on) {
     status.textContent = meta.last_saved
-      ? "On. Last saved " + fmtDate(meta.last_saved)
-      : "On.";
-    status.className = "mt-2 text-base font-medium text-brand-700";
-    toggle.textContent = "Save a fresh copy now";
+      ? "On · " + fmtDate(meta.last_saved)
+      : "On";
+    status.className = "setting-status ok";
+    toggle.textContent = "Save now";
   } else {
-    status.textContent = "Off.";
-    status.className = "mt-2 text-base font-medium text-amber-700";
-    toggle.textContent = "Keep a safe copy";
+    status.textContent = "Off";
+    status.className = "setting-status warning";
+    toggle.textContent = "Turn on";
   }
 }
 
@@ -1852,17 +1892,17 @@ async function runUpdateCheck() {
     if (version) {
       if (status) {
         status.textContent = "Update " + version + " is available.";
-        status.className = "mt-2 text-base font-medium text-brand-700";
+        status.className = "setting-status ok";
       }
       showUpdateBanner(version);
     } else if (status) {
       status.textContent = "You're up to date.";
-      status.className = "mt-2 text-base font-medium text-muted";
+      status.className = "setting-status";
     }
   } catch (_) {
     if (status) {
-      status.textContent = "Couldn't check right now. Check your internet and try again.";
-      status.className = "mt-2 text-base font-medium text-red-700";
+      status.textContent = "Check failed.";
+      status.className = "setting-status error";
     }
   } finally {
     if (status) status.classList.remove("hidden");
@@ -2470,7 +2510,7 @@ function quSettingsMsg(text, ok) {
   const el = $("#qu-settings-msg");
   if (!el) return;
   el.textContent = text;
-  el.className = "mt-2 text-base " + (ok ? "text-brand-700" : "text-red-700");
+  el.className = "setting-status " + (ok ? "ok" : "error");
   el.classList.remove("hidden");
 }
 

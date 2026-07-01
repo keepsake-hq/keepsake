@@ -228,7 +228,7 @@ body {
   grid-template-columns: minmax(0, 1fr) 18rem;
 }
 .settings-grid {
-  grid-template-columns: 14rem minmax(0, 1fr);
+  grid-template-columns: 12.5rem minmax(0, 1fr);
 }
 .agents-grid {
   grid-template-columns: 17rem minmax(0, 1fr);
@@ -302,6 +302,7 @@ body {
   border-radius: 8px;
   background: var(--color-surface);
   padding: 0.5rem;
+  align-self: stretch;
 }
 .settings-rail a,
 .settings-rail button {
@@ -314,11 +315,245 @@ body {
   text-align: left;
   font-size: 0.8125rem;
   color: var(--color-muted);
+  cursor: pointer;
 }
 .settings-rail a:hover,
 .settings-rail button:hover {
   background: var(--color-canvas);
   color: var(--color-ink);
+}
+.settings-rail button[aria-selected="true"] {
+  background: var(--color-brand-50);
+  color: var(--color-brand-700);
+  font-weight: 650;
+}
+.dark .settings-rail button[aria-selected="true"] {
+  background: color-mix(in srgb, var(--color-brand-700) 20%, var(--color-surface));
+  color: var(--color-brand-100);
+}
+.settings-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+.settings-panel-head {
+  flex: 0 0 auto;
+  min-height: 3.25rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  background: color-mix(in srgb, var(--color-panel) 82%, var(--color-surface));
+}
+.settings-panel-head h2 {
+  font-size: 0.875rem;
+  font-weight: 650;
+  color: var(--color-ink);
+}
+.settings-panel-head p,
+.settings-state {
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+  color: var(--color-muted);
+}
+.settings-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  white-space: nowrap;
+}
+.settings-section {
+  flex: 1 1 auto;
+}
+.setting-row {
+  min-height: 4.35rem;
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(10rem, auto);
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border-top: 1px solid var(--color-line);
+}
+.setting-row:first-child {
+  border-top: 0;
+}
+.setting-row h3,
+.settings-danger-zone h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.setting-row p,
+.settings-danger-zone p {
+  margin-top: 0.2rem;
+  font-size: 0.78rem;
+  color: var(--color-muted);
+}
+.setting-row-stack {
+  display: block;
+}
+.setting-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.setting-value,
+.setting-status {
+  justify-self: end;
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+.setting-status.ok {
+  color: var(--color-brand-700);
+}
+.dark .setting-status.ok {
+  color: var(--color-brand-300);
+}
+.setting-status.warning {
+  color: #9a6a00;
+}
+.dark .setting-status.warning {
+  color: #d7a02a;
+}
+.setting-status.error {
+  color: #b42318;
+}
+.settings-inline {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.settings-button,
+.settings-primary,
+.settings-danger-button,
+.segmented-control button {
+  min-height: 2.15rem;
+  border-radius: 6px;
+  padding: 0 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+.settings-button,
+.segmented-control button {
+  border: 1px solid var(--color-line);
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+.settings-button:hover,
+.segmented-control button:hover {
+  background: var(--color-canvas);
+}
+.settings-primary {
+  background: var(--color-brand-700);
+  color: #fff;
+}
+.settings-primary:hover {
+  background: var(--color-brand-800);
+}
+.settings-danger-link {
+  min-height: 2.15rem;
+  border-radius: 6px;
+  padding: 0 0.55rem;
+  font-size: 0.8125rem;
+  font-weight: 550;
+  color: #b42318;
+}
+.settings-danger-link:hover {
+  background: #fef3f2;
+}
+.dark .settings-danger-link:hover {
+  background: color-mix(in srgb, #b42318 16%, var(--color-surface));
+}
+.settings-danger-button {
+  border: 1px solid color-mix(in srgb, #b42318 30%, var(--color-line));
+  color: #b42318;
+  background: transparent;
+}
+.settings-danger-button:hover {
+  background: #fef3f2;
+}
+.dark .settings-danger-button:hover {
+  background: color-mix(in srgb, #b42318 16%, var(--color-surface));
+}
+.settings-form {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.55rem;
+}
+.settings-input {
+  min-height: 2.25rem;
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--color-line);
+  background: var(--color-canvas);
+  padding: 0 0.7rem;
+  font-size: 0.8125rem;
+  color: var(--color-ink);
+}
+.settings-input::placeholder {
+  color: var(--color-soft);
+}
+.settings-input:focus {
+  outline: 0;
+  border-color: var(--color-brand-500);
+}
+.segmented-control {
+  justify-self: end;
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--color-line);
+  border-radius: 7px;
+  background: var(--color-surface);
+}
+.segmented-control button {
+  border: 0;
+  border-radius: 0;
+  border-left: 1px solid var(--color-line);
+  background: transparent;
+}
+.segmented-control button:first-child {
+  border-left: 0;
+}
+.segmented-control button[data-active="true"] {
+  background: var(--color-brand-700);
+  color: #fff;
+}
+.segmented-control button[data-active="true"]:hover {
+  background: var(--color-brand-800);
+}
+.settings-code {
+  justify-self: end;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-canvas);
+  padding: 0.35rem 0.55rem;
+  font-size: 0.78rem;
+  color: var(--color-ink);
+}
+.settings-danger-zone {
+  margin-top: 1rem;
+  padding: 0.9rem 1rem;
+  border-top: 1px solid var(--color-line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
 }
 .settings-list {
   border: 1px solid var(--color-line);
@@ -389,6 +624,13 @@ body {
 .row-surface:hover {
   border-color: var(--color-line);
   background: color-mix(in srgb, var(--color-surface) 76%, transparent);
+}
+.source-row-planned {
+  opacity: 0.62;
+}
+.source-row-planned:hover {
+  background: transparent;
+  border-color: transparent;
 }
 .row-surface:active {
   transform: translateY(1px);
@@ -540,7 +782,17 @@ body {
     grid-template-columns: minmax(0, 1fr);
   }
   .settings-rail {
-    display: none;
+    display: flex;
+    overflow-x: auto;
+    gap: 0.25rem;
+  }
+  .settings-rail button {
+    width: auto;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .settings-grid {
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .tool-header,
   .tool-body {
@@ -561,6 +813,21 @@ body {
   .profile-row,
   #profile-text > .grid {
     grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .setting-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .setting-row-main,
+  .settings-danger-zone {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .setting-value,
+  .setting-status,
+  .settings-inline,
+  .segmented-control,
+  .settings-code {
+    justify-self: start;
   }
 }
 @media (prefers-reduced-motion: reduce) {
