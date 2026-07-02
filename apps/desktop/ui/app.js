@@ -1338,6 +1338,8 @@ on("#reveal-seed-btn", "click", async () => {
       return;
     }
   }
+  window.__REVEALED_SEED__ = phrase;
+  buildPrintSheet(phrase.split(/\s+/));
   const grid = $("#reveal-seed-grid");
   if (grid)
     grid.innerHTML = phrase
@@ -1352,7 +1354,23 @@ on("#reveal-seed-btn", "click", async () => {
   const btn = $("#reveal-seed-btn");
   if (btn) btn.classList.add("hidden");
 });
+on("#reveal-seed-print", "click", () => {
+  if (window.__REVEALED_SEED__) window.print();
+});
+on("#reveal-seed-copy", "click", async () => {
+  const phrase = window.__REVEALED_SEED__ || "";
+  if (!phrase) return;
+  try {
+    await navigator.clipboard.writeText(phrase);
+    const label = $("#reveal-seed-copy-label");
+    if (label) {
+      label.textContent = "Copied";
+      setTimeout(() => (label.textContent = "Copy key"), 1800);
+    }
+  } catch (_) {}
+});
 on("#reveal-seed-hide", "click", () => {
+  window.__REVEALED_SEED__ = "";
   const grid = $("#reveal-seed-grid");
   if (grid) grid.innerHTML = "";
   const area = $("#reveal-seed-area");
@@ -1554,6 +1572,7 @@ function fmtDate(ts) {
 async function loadBackupStatus() {
   const status = $("#backup-status");
   const toggle = $("#backup-toggle");
+  const last = $("#backup-last");
   if (!status || !toggle) return;
   let meta = { on: false, last_saved: 0 };
   if (!DEMO && invoke) {
@@ -1562,15 +1581,15 @@ async function loadBackupStatus() {
     } catch (_) {}
   }
   if (meta && meta.on) {
-    status.textContent = meta.last_saved
-      ? "On · " + fmtDate(meta.last_saved)
-      : "On";
+    status.textContent = "On";
     status.className = "setting-status ok";
     toggle.textContent = "Save now";
+    if (last) last.textContent = meta.last_saved ? fmtDate(meta.last_saved) : "Not run";
   } else {
     status.textContent = "Off";
     status.className = "setting-status warning";
     toggle.textContent = "Turn on";
+    if (last) last.textContent = "Not run";
   }
 }
 
@@ -1611,9 +1630,9 @@ function backupPasswordModal({ title, intro, action, run }) {
 
 function openBackupEnable() {
   backupPasswordModal({
-    title: "Keep a safe copy",
-    intro: "Choose a password for your safe copy. It's different from your 24 words. Write it down too. We can't reset it for you.",
-    action: "Turn on safe copy",
+    title: "Encrypted backup",
+    intro: "Set a backup password. It cannot be reset.",
+    action: "Turn on backup",
     run: async (pw) => {
       if (DEMO || !invoke) return;
       await invoke("backup_enable", { password: pw });
@@ -1624,9 +1643,9 @@ function openBackupEnable() {
 
 function openBackupRestore() {
   backupPasswordModal({
-    title: "Bring back your memories",
-    intro: "Enter your safe-copy password to bring all your memories back onto this computer.",
-    action: "Bring them back",
+    title: "Restore backup",
+    intro: "Enter the backup password.",
+    action: "Restore",
     run: async (pw) => {
       if (DEMO || !invoke) return;
       await invoke("backup_restore", { password: pw });
@@ -1906,11 +1925,16 @@ const DEMO_MEMORIES = (() => {
 async function runUpdateCheck() {
   const status = $("#update-status");
   const btn = $("#update-check-btn");
+  const lastChecked = $("#update-last-checked");
+  const markChecked = () => {
+    if (lastChecked) lastChecked.textContent = fmtDate(Math.floor(Date.now() / 1000));
+  };
   if (DEMO || !invoke) {
     if (status) {
       status.textContent = "You're up to date.";
       status.classList.remove("hidden");
     }
+    markChecked();
     return;
   }
   if (btn) {
@@ -1935,10 +1959,11 @@ async function runUpdateCheck() {
       status.className = "setting-status error";
     }
   } finally {
+    markChecked();
     if (status) status.classList.remove("hidden");
     if (btn) {
       btn.disabled = false;
-      btn.textContent = "Check for updates";
+      btn.textContent = "Check now";
     }
   }
 }
