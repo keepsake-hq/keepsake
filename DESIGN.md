@@ -30,6 +30,8 @@ A user opens Keepsake on a laptop in normal daylight to save, search, import, or
 - NicelyDone Reflect/Clew: graph and map clarity.
 - NicelyDone Twingate/Sana/Linear/Expensify: connect buttons, integration cards, setup lists.
 - Mobbin screenshot supplied in the planning thread: client selector tiles plus numbered setup commands.
+- Premium UI pass: NicelyDone Vercel/GitHub/Slite for compact preference rows and left settings navigation; Linear for dense preferences and restrained active states; Attio/Twingate/GitBook for integration rows with a clear action column; Mobbin Skiff/Vercel setup flows for recovery confirmation and command-copy patterns.
+- Do not borrow: SaaS marketing banners, upsell blocks, long scroll pages, concierge/chat setup lists, large empty hero states, or colorful product-specific sidebars.
 
 ## Component Rules
 - Connector card: icon/initial, title, description, privacy note, status chip, primary action.

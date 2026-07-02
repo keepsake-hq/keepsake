@@ -124,7 +124,7 @@ function cardHtml(mem) {
   const src = sourceLabel(mem.source);
   const type = TRAVEL_RE.test(text) ? "Travel" : "Memory";
   return `
-    <div data-card="${mem.id}" data-text="${escapeHtml(title)}" class="memory-table-row row-surface memory-ledger-row group px-4 py-3 cursor-pointer">
+    <div data-card="${mem.id}" data-text="${escapeHtml(title)}" class="memory-table-row row-surface memory-ledger-row group px-4 py-3 cursor-pointer ${SELECTED_HOME_MEMORY_ID === mem.id ? "row-selected" : ""}">
       <div class="min-w-0 flex items-center gap-3">
         <span class="icon-cell w-9 h-9 rounded-lg flex items-center justify-center shrink-0">${icon}</span>
         <div class="min-w-0">
@@ -152,14 +152,14 @@ function countLabel(n) {
 }
 
 const SETTINGS_SECTIONS = {
-  general: ["General", "Local app defaults."],
+  general: ["General", "Local defaults."],
   appearance: ["Appearance", "Theme and density."],
-  "recovery-key": ["Recovery Key", "Key and trusted recovery."],
-  "quick-unlock": ["Quick Unlock", "Local device unlock."],
-  sync: ["Sync", "Device sync controls."],
-  backup: ["Backup", "Encrypted safe copy."],
-  updates: ["Updates", "Manual checks only."],
-  advanced: ["Advanced", "Technical and reset controls."],
+  "recovery-key": ["Recovery Key", "Key and recovery."],
+  "quick-unlock": ["Quick Unlock", "Device unlock."],
+  sync: ["Sync", "Device sync."],
+  backup: ["Backup", "Safe copy."],
+  updates: ["Updates", "Manual checks."],
+  advanced: ["Advanced", "Tools and reset."],
 };
 
 function setSettingsSection(id) {
@@ -282,9 +282,16 @@ function wireMemoryRows(host, memories) {
   host.querySelectorAll("[data-card]").forEach((row) =>
     row.addEventListener("click", () => {
       SELECTED_HOME_MEMORY_ID = row.dataset.card;
+      markSelectedMemoryRows();
       renderHomeDetail(memories.find((m) => m.id === SELECTED_HOME_MEMORY_ID) || null);
     }),
   );
+}
+
+function markSelectedMemoryRows() {
+  document.querySelectorAll("[data-card]").forEach((row) => {
+    row.classList.toggle("row-selected", row.dataset.card === SELECTED_HOME_MEMORY_ID);
+  });
 }
 
 function renderHomeDetail(mem) {
@@ -297,6 +304,7 @@ function renderHomeDetail(mem) {
   }
   const title = (mem.text || "").split("\n").find((line) => line.trim()) || "Untitled memory";
   const src = sourceLabel(mem.source) || "added here";
+  const type = TRAVEL_RE.test(mem.text || "") ? "Travel" : "Memory";
   const created = new Date(mem.created_at * 1000).toLocaleString("en-US", {
     month: "short",
     day: "numeric",
@@ -308,24 +316,33 @@ function renderHomeDetail(mem) {
     .filter((m) => m.id !== mem.id)
     .slice(0, 3);
   host.innerHTML = `
-    <h3 class="text-base font-semibold leading-snug text-ink">${escapeHtml(title.trim())}</h3>
-    <p class="mt-2 text-sm text-muted">${escapeHtml((mem.text || "").replace(/\s*\n\s*/g, " ").slice(0, 160))}</p>
-    <div class="mt-5 border-t border-line pt-4">
-      <h4 class="text-xs font-semibold text-soft">Details</h4>
-      <dl class="mt-3 space-y-2 text-sm">
-        <div class="flex justify-between gap-4"><dt class="text-muted">Source</dt><dd class="text-ink text-right">${escapeHtml(src)}</dd></div>
-        <div class="flex justify-between gap-4"><dt class="text-muted">Created</dt><dd class="text-ink text-right">${escapeHtml(created)}</dd></div>
-        <div class="flex justify-between gap-4"><dt class="text-muted">Memory ID</dt><dd class="text-ink text-right">${escapeHtml(mem.id.slice(0, 10))}…</dd></div>
+    <div class="inspector-section first">
+      <h3 class="text-base font-semibold leading-snug text-ink">${escapeHtml(title.trim())}</h3>
+      <p class="mt-2 text-sm text-muted">${escapeHtml((mem.text || "").replace(/\s*\n\s*/g, " ").slice(0, 180))}</p>
+    </div>
+    <div class="inspector-section">
+      <h4>Details</h4>
+      <dl class="inspector-kv">
+        <div><dt>Source</dt><dd>${escapeHtml(src)}</dd></div>
+        <div><dt>Type</dt><dd>${escapeHtml(type)}</dd></div>
+        <div><dt>Created</dt><dd>${escapeHtml(created)}</dd></div>
+        <div><dt>Last access</dt><dd>This session</dd></div>
+        <div><dt>Memory ID</dt><dd>${escapeHtml(mem.id.slice(0, 10))}...</dd></div>
       </dl>
     </div>
-    <div class="mt-5 border-t border-line pt-4">
-      <h4 class="text-xs font-semibold text-soft">Related</h4>
+    <div class="inspector-section">
+      <h4>Related</h4>
       <div class="mt-3 space-y-2">
         ${related
           .map((m) => `<div class="flex items-start justify-between gap-3 text-sm"><span class="text-muted">${escapeHtml((m.text || "").split("\n")[0].slice(0, 44))}</span><span class="text-xs text-soft">${escapeHtml(dateLabel(m.created_at).replace(/, 2026$/, ""))}</span></div>`)
           .join("") || `<div class="text-sm text-muted">No related memories yet.</div>`}
       </div>
+    </div>
+    <div class="inspector-section">
+      <button data-detail-forget="${escapeHtml(mem.id)}" class="settings-danger-link">Remove from ledger</button>
     </div>`;
+  const forget = host.querySelector("[data-detail-forget]");
+  if (forget) forget.addEventListener("click", () => doForget(mem.id));
 }
 
 // ---------- data ----------
@@ -333,7 +350,7 @@ async function refresh() {
   if (DEMO) {
     SETTINGS_COUNT = DEMO_MEMORIES.length;
     const setCount = $("#set-count");
-    if (setCount) setCount.textContent = String(SETTINGS_COUNT);
+    if (setCount) setCount.textContent = countLabel(SETTINGS_COUNT);
     const setCountRail = $("#set-count-rail");
     if (setCountRail) setCountRail.textContent = String(SETTINGS_COUNT);
     renderTimeline(DEMO_MEMORIES);
@@ -345,7 +362,7 @@ async function refresh() {
   try {
     const st = await invoke("status");
     SETTINGS_COUNT = st.memories;
-    $("#set-count").textContent = String(st.memories);
+    $("#set-count").textContent = countLabel(st.memories);
     const setCountRail = $("#set-count-rail");
     if (setCountRail) setCountRail.textContent = String(st.memories);
   } catch (_) {}
@@ -360,11 +377,11 @@ async function refresh() {
 }
 
 function statusLabel(status) {
-  return status === "connected" ? "Connected" : status === "planned" ? "Planned" : "Available";
+  return status === "connected" ? "Connected" : status === "planned" ? "Planned" : "Ready";
 }
 function statusClass(status) {
   if (status === "connected") return "bg-brand-50 text-brand-800 border-brand-200";
-  if (status === "planned") return "bg-amber-50 text-amber-800 border-amber-200";
+  if (status === "planned") return "bg-canvas text-soft border-line";
   return "bg-canvas text-muted border-line";
 }
 function connectorInitial(title) {
@@ -372,16 +389,16 @@ function connectorInitial(title) {
 }
 function demoConnectors() {
   const specs = [
-    ["claude-code", "Claude Code", "CLAUDE.md and local notes.", "AI chats", "import:claude-code", "local-auto", false, true, "Scan", "Local files only."],
-    ["coding-agents", "Coding agents", "Codex, Cursor, Gemini, Aider.", "AI chats", "import:coding-agents", "local-auto", false, true, "Scan", "Local files only."],
+    ["claude-code", "Claude Code", "Project context.", "AI chats", "import:claude-code", "local-auto", false, true, "Scan", "Local files only."],
+    ["coding-agents", "Coding agents", "Agent exports.", "AI chats", "import:coding-agents", "local-auto", false, true, "Scan", "Local files only."],
     ["obsidian", "Obsidian", "Markdown vaults.", "Notes", "import:obsidian", "local-auto", false, true, "Scan", "Local folders only."],
-    ["local-folder", "Files and folders", "Markdown, text, JSON, CSV.", "Files", "import:folder", "local-picker", false, true, "Pick", "Selected path only."],
-    ["paste", "Paste memories", "Manual import.", "AI chats", "import:paste", "paste", false, true, "Paste", "Parsed locally."],
-    ["mcp-agents", "Claude, Cursor, Codex, OpenCode", "Shared local memory hub.", "Agents", "mcp", "agent-setup", false, false, "Setup", "Scoped pass only."],
-    ["google-drive", "Google Drive", "Selected Drive files.", "Cloud", "import:google-drive", "cloud-oauth-planned", true, false, "Planned", "No background sync."],
-    ["notion", "Notion", "Selected pages.", "Cloud", "import:notion", "cloud-oauth-planned", true, false, "Planned", "No background sync."],
-    ["github", "GitHub", "Selected repos or issues.", "Cloud", "import:github", "cloud-oauth-planned", true, false, "Planned", "No background scan."],
-    ["gmail", "Gmail", "Selected threads.", "Cloud", "import:gmail", "cloud-oauth-planned", true, false, "Planned", "No background sync."],
+    ["local-folder", "Files and folders", "Local files.", "Files", "import:folder", "local-picker", false, true, "Pick", "Selected path only."],
+    ["paste", "Paste memories", "Manual text.", "AI chats", "import:paste", "paste", false, true, "Paste", "Parsed locally."],
+    ["mcp-agents", "Claude, Cursor, Codex, OpenCode", "Client setup.", "Agents", "mcp", "agent-setup", false, false, "Setup", "Scoped pass only."],
+    ["google-drive", "Google Drive", "Drive files.", "Cloud", "import:google-drive", "cloud-oauth-planned", true, false, "Planned", "No background sync."],
+    ["notion", "Notion", "Pages.", "Cloud", "import:notion", "cloud-oauth-planned", true, false, "Planned", "No background sync."],
+    ["github", "GitHub", "Repos and issues.", "Cloud", "import:github", "cloud-oauth-planned", true, false, "Planned", "No background scan."],
+    ["gmail", "Gmail", "Threads.", "Cloud", "import:gmail", "cloud-oauth-planned", true, false, "Planned", "No background sync."],
   ];
   return specs.map(([id, title, description, category, source_tag, access, network, supports_preview, primary_action, privacy_note]) => {
     const matches = DEMO_MEMORIES.filter((m) => source_tag === "mcp" ? (m.source || "").startsWith("mcp:") : m.source === source_tag);
@@ -419,7 +436,9 @@ async function refreshSources() {
     try { connectors = await invoke("connector_catalog"); } catch (_) { connectors = []; }
     try { documents = await invoke("documents_list", { source: null, limit: 24 }); } catch (_) { documents = []; }
   }
-  $("#connector-count").textContent = connectors.length ? `${connectors.length} sources` : "";
+  const localCount = connectors.filter((c) => !c.network).length;
+  const plannedCount = connectors.filter((c) => c.status === "planned").length;
+  $("#connector-count").textContent = connectors.length ? `${localCount} local · ${plannedCount} planned` : "";
   list.innerHTML = connectors.map(renderConnectorRow).join("");
   renderDocuments(documents);
   document.querySelectorAll("[data-connector-action]").forEach((b) =>
@@ -444,10 +463,10 @@ function renderConnectorCard(c) {
 }
 function renderConnectorRow(c) {
   const count = c.memory_count ? `${c.memory_count} ${c.memory_count === 1 ? "memory" : "memories"}` : c.network ? "Needs explicit connect" : "Ready";
-  const last = c.last_imported_at ? fmtTime(c.last_imported_at) : c.network ? "Not connected" : "Ready";
+  const last = c.last_imported_at ? fmtTime(c.last_imported_at) : c.network ? "Not available" : "Not scanned";
   const planned = c.status === "planned";
   return `
-    <button data-connector-action="${escapeHtml(c.id)}" aria-disabled="${planned}" class="memory-table-row row-surface source-row ${planned ? "source-row-planned" : ""} w-full px-4 py-3 text-left grid gap-3 items-center md:grid-cols-[minmax(12rem,1fr)_7rem_6.5rem_8rem_6rem]">
+    <button data-connector-action="${escapeHtml(c.id)}" aria-disabled="${planned}" class="memory-table-row row-surface source-row ${planned ? "source-row-planned" : "source-row-local"} w-full px-4 py-3 text-left grid gap-3 items-center md:grid-cols-[minmax(12rem,1fr)_7rem_6.5rem_8rem_7rem]">
       <span class="min-w-0 flex items-center gap-3">
         <span class="icon-cell w-9 h-9 rounded-lg flex items-center justify-center text-xs font-semibold shrink-0">${escapeHtml(connectorInitial(c.title))}</span>
         <span class="min-w-0">
@@ -458,7 +477,7 @@ function renderConnectorRow(c) {
       <span class="hidden md:block text-xs text-muted">${escapeHtml(c.category)}</span>
       <span class="inline-flex w-fit rounded-md border px-2 py-1 text-xs font-semibold ${statusClass(c.status)}">${statusLabel(c.status)}</span>
       <span class="hidden md:block text-xs text-muted">${escapeHtml(last)}</span>
-      <span class="hidden md:block text-xs font-medium text-ink">${escapeHtml(c.primary_action || count)}</span>
+      <span class="source-action hidden md:block text-xs font-medium text-ink">${escapeHtml(c.primary_action || count)}</span>
     </button>`;
 }
 function renderDocuments(documents) {
@@ -483,7 +502,7 @@ function connectorAction(id) {
   if (["google-drive", "notion", "github", "gmail", "web-clipper"].includes(id)) {
     modalShell(`
       <h2 class="text-2xl font-bold text-ink">Planned connector</h2>
-      <p class="mt-2 text-base text-muted">This source is visible so you know where Keepsake is going. It will not connect or call the network until a real explicit setup flow exists.</p>
+      <p class="mt-2 text-base text-muted">No connection is made. Cloud sources need an explicit setup flow first.</p>
       <div class="mt-6"><button data-close class="min-h-[48px] w-full rounded-xl border-2 border-line text-lg font-semibold text-ink hover:bg-canvas transition">Close</button></div>`)
       .querySelector("[data-close]").addEventListener("click", (e) => e.currentTarget.closest(".fixed").remove());
     return;
@@ -601,7 +620,7 @@ function renderProfileAudit(profile) {
     });
   }
   rows.push(
-    { label: "Conflicts", value: "Not tracked in this build", type: "Audit" },
+    { label: "Conflicts", value: "Not tracked", type: "Audit" },
     { label: "Stale facts", value: "Rebuild to refresh", type: "Audit" },
   );
   return `
@@ -766,13 +785,18 @@ async function doSearch() {
   const results = $("#search-results");
   if (!q) {
     results.innerHTML = "";
+    results.classList.add("hidden");
     const count = $("#search-result-count");
     if (count) count.textContent = "Type to search";
     if (examples) examples.classList.remove("hidden");
-    if (empty) empty.classList.add("hidden");
+    if (empty) {
+      empty.classList.remove("hidden");
+      empty.innerHTML = `<div class="px-4 py-5 text-sm text-muted">Enter a query to search the local vault.</div>`;
+    }
     return;
   }
   if (examples) examples.classList.add("hidden");
+  results.classList.remove("hidden");
   let hits = [];
   if (DEMO) {
     hits = DEMO_MEMORIES.filter((m) =>
@@ -792,6 +816,7 @@ async function doSearch() {
     results.innerHTML = hits.map(renderHit).join("");
   } else {
     results.innerHTML = "";
+    results.classList.add("hidden");
     const count = $("#search-result-count");
     if (count) count.textContent = "No result";
     await showNoResult(q);
@@ -813,7 +838,7 @@ async function showNoResult(q) {
   empty.innerHTML = `
     <div class="px-4 py-5 border-b border-line">
       <p class="text-sm font-semibold text-ink">No match.</p>
-      <p class="mt-1 text-sm text-muted">Shorten the query or save it.</p>
+      <p class="mt-1 text-sm text-muted">Try another query or save it.</p>
       <button id="save-as-memory" class="mt-4 inline-flex min-h-[38px] items-center rounded-md bg-brand-700 px-3 text-sm font-semibold text-white hover:bg-brand-800 transition">Save “${escapeHtml(q)}”</button>
     </div>
     ${recent.length ? `<div><div class="px-4 py-2 text-xs font-semibold text-soft border-b border-line">Recent memories</div><ul>${recent.map(renderHit).join("")}</ul></div>` : ""}`;
@@ -1205,7 +1230,10 @@ function navTo(view) {
   $$(".view").forEach((s) =>
     s.classList.toggle("hidden", s.getAttribute("data-screen") !== view),
   );
-  if (view === "suchen") setTimeout(() => $("#search-input").focus(), 30);
+  if (view === "suchen") {
+    doSearch();
+    setTimeout(() => $("#search-input").focus(), 30);
+  }
   if (view === "quellen") refreshSources();
   if (view === "agents") renderAgents();
   if (view === "profile") refreshProfile();
@@ -1257,6 +1285,8 @@ $$("[data-home-view]").forEach((b) =>
 function refreshSearchModes() {
   $$(".search-mode").forEach((b) => {
     const active = b.dataset.searchMode === SEARCH_MODE;
+    b.dataset.active = active ? "true" : "false";
+    b.setAttribute("aria-pressed", String(active));
     b.classList.toggle("bg-brand-700", active);
     b.classList.toggle("text-white", active);
     b.classList.toggle("border-brand-700", active);

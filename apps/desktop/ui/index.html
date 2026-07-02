@@ -230,11 +230,11 @@
             <div class="tool-title-row">
               <div>
                 <h1>Memory</h1>
-                <p>Local context ledger.</p>
+                <p>Local memory ledger.</p>
               </div>
               <div class="tool-actions">
                 <span class="inline-flex items-center gap-2"><span class="status-dot"></span>Local</span>
-                <span>Network idle</span>
+                <span>Manual network</span>
                 <button data-home-view="einstellungen" class="text-ink hover:text-brand-700 transition">Settings</button>
               </div>
             </div>
@@ -242,7 +242,7 @@
             <div class="mt-4 utility-bar">
               <div><span>Vault</span><strong>Local</strong></div>
               <div><span>Key</span><strong>This Mac</strong></div>
-              <div><span>Access</span><strong>User action</strong></div>
+              <div><span>Network</span><strong>Manual</strong></div>
             </div>
 
             <div class="mt-4 command-bar rounded-lg p-2 flex items-center gap-3">
@@ -285,7 +285,7 @@
               </div>
 
               <aside class="inspector rounded-lg px-5 py-5">
-                <h2 class="text-sm font-semibold text-ink">Inspector</h2>
+                <h2 class="text-sm font-semibold text-ink">Memory details</h2>
                 <div id="home-detail" class="mt-5"></div>
               </aside>
             </div>
@@ -327,7 +327,7 @@
             <div class="tool-title-row">
               <div>
                 <h1>Sources</h1>
-                <p>Local imports and planned connectors.</p>
+                <p>Local sources and planned connectors.</p>
               </div>
               <div class="tool-actions">
                 <span id="connector-count"></span>
@@ -340,7 +340,7 @@
               <div class="ledger-panel">
                 <div class="ledger-toolbar">
                   <h2>Integration list</h2>
-                  <span>No background network</span>
+                  <span>Explicit actions only</span>
                 </div>
                 <div class="source-head">
                   <span>Source</span>
@@ -352,8 +352,8 @@
                 <div id="connector-list" class="ledger-table scroll-region"></div>
               </div>
               <aside class="inspector rounded-lg p-5">
-                <h2 class="text-sm font-semibold text-ink">Documents</h2>
-                <p class="mt-1 text-sm text-muted">Recent imports.</p>
+                <h2 class="text-sm font-semibold text-ink">Recent documents</h2>
+                <p class="mt-1 text-sm text-muted">Imported items.</p>
                 <div id="document-list" class="mt-4 scroll-region space-y-0"></div>
               </aside>
             </div>
@@ -398,7 +398,7 @@
             <div class="tool-title-row">
               <div>
                 <h1>Profile audit</h1>
-                <p>Facts and source audit.</p>
+                <p>Facts, sources, conflicts.</p>
               </div>
               <div class="tool-actions">
                 <button id="profile-redistill" class="min-h-[36px] rounded-md bg-brand-700 px-3 text-sm font-semibold text-white hover:bg-brand-800 transition">Rebuild</button>
@@ -443,10 +443,10 @@
             </div>
             <div id="search-modes" class="mt-3 flex flex-wrap gap-2">
               <button data-search-mode="balanced" class="search-mode min-h-[34px] rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Balanced</button>
-              <button data-search-mode="hybrid" class="search-mode min-h-[34px] rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Hybrid</button>
               <button data-search-mode="recent" class="search-mode min-h-[34px] rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Recent</button>
               <button data-search-mode="semantic" class="search-mode min-h-[34px] rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Semantic</button>
               <button data-search-mode="graph_first" class="search-mode min-h-[34px] rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Graph</button>
+              <button data-search-mode="hybrid" class="search-mode min-h-[34px] rounded-md border border-line bg-surface px-3 text-sm font-semibold text-ink hover:bg-canvas transition">Hybrid</button>
             </div>
           </header>
           <div class="tool-body">
@@ -473,21 +473,30 @@
             <div class="tool-title-row">
               <div>
                 <h1>Settings</h1>
-                <p>Device controls and vault behavior.</p>
+                <p>Vault controls.</p>
               </div>
             </div>
           </header>
           <div class="tool-body">
             <div class="workspace-grid settings-grid">
-              <aside class="settings-rail">
-                <button data-settings-tab="general" aria-selected="true">General</button>
-                <button data-settings-tab="appearance" aria-selected="false">Appearance</button>
-                <button data-settings-tab="recovery-key" aria-selected="false">Recovery Key</button>
-                <button data-settings-tab="quick-unlock" aria-selected="false">Quick Unlock</button>
-                <button data-settings-tab="sync" aria-selected="false">Sync</button>
-                <button data-settings-tab="backup" aria-selected="false">Backup</button>
-                <button data-settings-tab="updates" aria-selected="false">Updates</button>
-                <button data-settings-tab="advanced" aria-selected="false">Advanced</button>
+              <aside class="settings-rail" aria-label="Settings categories">
+                <div class="settings-rail-group">
+                  <p class="settings-rail-label">Vault</p>
+                  <button data-settings-tab="general" aria-selected="true"><span>General</span><span id="set-count-rail" class="settings-rail-meta">-</span></button>
+                  <button data-settings-tab="appearance" aria-selected="false"><span>Appearance</span><span class="settings-rail-meta">System</span></button>
+                </div>
+                <div class="settings-rail-group">
+                  <p class="settings-rail-label">Access</p>
+                  <button data-settings-tab="recovery-key" aria-selected="false"><span>Recovery Key</span><span class="settings-rail-meta">Ready</span></button>
+                  <button data-settings-tab="quick-unlock" aria-selected="false"><span>Quick Unlock</span><span class="settings-rail-meta">Local</span></button>
+                  <button data-settings-tab="sync" aria-selected="false"><span>Sync</span><span class="settings-rail-meta">Off</span></button>
+                  <button data-settings-tab="backup" aria-selected="false"><span>Backup</span><span class="settings-rail-meta">Manual</span></button>
+                </div>
+                <div class="settings-rail-group">
+                  <p class="settings-rail-label">System</p>
+                  <button data-settings-tab="updates" aria-selected="false"><span>Updates</span><span class="settings-rail-meta">Manual</span></button>
+                  <button data-settings-tab="advanced" aria-selected="false"><span>Advanced</span><span class="settings-rail-meta">Tools</span></button>
+                </div>
               </aside>
               <div class="settings-panel">
                 <div class="settings-panel-head">
@@ -500,17 +509,23 @@
 
                 <div data-settings-section="general" class="settings-section scroll-region">
                   <div class="setting-row">
-                    <div><h3>Vault</h3><p>Stored on this Mac.</p></div>
-                    <div class="setting-value">Local</div>
-                    <span id="set-count" class="hidden">–</span>
+                    <div><h3>Vault status</h3><p>Encrypted store on this Mac.</p></div>
+                    <div class="settings-inline">
+                      <span class="setting-status ok">Local</span>
+                      <span id="set-count" class="setting-value">- memories</span>
+                    </div>
                   </div>
                   <div class="setting-row">
                     <div><h3>Network access</h3><p>Only after a direct action.</p></div>
-                    <div class="setting-value">Idle</div>
+                    <div class="setting-value">Manual</div>
                   </div>
                   <div class="setting-row">
                     <div><h3>Agent access</h3><p>Scoped local passes.</p></div>
                     <button data-home-view="agents" class="settings-button">Manage</button>
+                  </div>
+                  <div class="setting-row">
+                    <div><h3>Local data</h3><p>Vault files stay on this device.</p></div>
+                    <div class="setting-value">This Mac</div>
                   </div>
                 </div>
 
@@ -527,12 +542,20 @@
                     <div><h3>Density</h3><p>Ledger-first layout.</p></div>
                     <div class="setting-value">Compact</div>
                   </div>
+                  <div class="setting-row">
+                    <div><h3>Sidebar</h3><p>Fixed navigation.</p></div>
+                    <div class="setting-value">Pinned</div>
+                  </div>
                 </div>
 
                 <div data-settings-section="recovery-key" class="settings-section scroll-region hidden">
+                  <div class="setting-row">
+                    <div><h3>Key status</h3><p>Required for this vault.</p></div>
+                    <span class="setting-status ok">Available</span>
+                  </div>
                   <div class="setting-row setting-row-stack">
                     <div class="setting-row-main">
-                      <div><h3>Recovery key</h3><p>Show the 24 words for this vault.</p></div>
+                      <div><h3>Recovery key</h3><p>Show the 24 words.</p></div>
                       <button id="reveal-seed-btn" class="settings-button">
                         Show key
                       </button>
@@ -544,7 +567,7 @@
                     </div>
                   </div>
                   <div class="setting-row">
-                    <div><h3>Trusted recovery</h3><p>Restore with trusted people.</p></div>
+                    <div><h3>Trusted recovery</h3><p>Optional recovery help.</p></div>
                     <div class="settings-inline">
                       <span id="safetynet-status" class="setting-status warning">Not set up</span>
                       <button id="safetynet-setup" class="settings-button">Set up</button>
@@ -555,7 +578,7 @@
                 <div data-settings-section="quick-unlock" class="settings-section scroll-region hidden">
                   <div class="setting-row setting-row-stack">
                     <div class="setting-row-main">
-                      <div><h3>Quick unlock</h3><p>Use a local PIN on this Mac.</p></div>
+                      <div><h3>Quick unlock</h3><p>Local PIN on this Mac.</p></div>
                       <p id="qu-settings-msg" class="text-sm hidden"></p>
                     </div>
 
@@ -583,10 +606,13 @@
                 </div>
 
                 <div data-settings-section="sync" class="settings-section scroll-region hidden">
+                  <div class="setting-row">
+                    <div><h3>Sync status</h3><p>No automatic device sync.</p></div>
+                    <p id="sync-status" class="setting-status">Off</p>
+                  </div>
                   <div class="setting-row setting-row-stack">
                     <div class="setting-row-main">
-                      <div><h3>Device sync</h3><p>Off unless you turn it on.</p></div>
-                      <p id="sync-status" class="setting-status">Off</p>
+                      <div><h3>Device sync</h3><p>Choose a sync mode.</p></div>
                     </div>
                     <div class="segmented-control" role="group" aria-label="Device sync">
                       <button data-sync="off" class="sync-opt">Off</button>
@@ -609,6 +635,10 @@
                       <button id="backup-restore-btn" class="settings-button">Restore</button>
                     </div>
                   </div>
+                  <div class="setting-row">
+                    <div><h3>Last backup</h3><p>Only updates when you run it.</p></div>
+                    <div class="setting-value">Not run</div>
+                  </div>
                 </div>
 
                 <div data-settings-section="updates" class="settings-section scroll-region hidden">
@@ -619,12 +649,20 @@
                       <button id="update-check-btn" class="settings-button">Check now</button>
                     </div>
                   </div>
+                  <div class="setting-row">
+                    <div><h3>Automatic checks</h3><p>No background ping.</p></div>
+                    <div class="setting-value">Off</div>
+                  </div>
                 </div>
 
                 <div data-settings-section="advanced" class="settings-section scroll-region hidden">
                   <div class="setting-row">
-                    <div><h3>Assistant command</h3><p>For local agent setup.</p></div>
+                    <div><h3>Agent config</h3><p>Local assistant setup.</p></div>
                     <code class="settings-code">keepsake connect</code>
+                  </div>
+                  <div class="setting-row">
+                    <div><h3>Data folder</h3><p>Local vault storage.</p></div>
+                    <div class="setting-value">Device</div>
                   </div>
                   <div class="setting-row">
                     <div><h3>Lock this app</h3><p>Hide memory until unlock.</p></div>
